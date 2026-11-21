@@ -177,7 +177,14 @@ pub async fn streams(
             );
             let mut list = Vec::new();
             if let Ok(payload) = res_res {
-                list.extend(moviebox_resource_json_to_releases(&payload));
+                let mut res_items = moviebox_resource_json_to_releases(&payload);
+                if season > 0 || episode > 0 {
+                    res_items.retain(|r| {
+                        r.season.unwrap_or(season) == season
+                            && r.episode.unwrap_or(episode) == episode
+                    });
+                }
+                list.extend(res_items);
             }
             if let Ok(payload) = play_res {
                 list.extend(moviebox_play_info_json_to_releases(
@@ -293,6 +300,23 @@ pub async fn resolve(
     let lower_url = target_url.to_ascii_lowercase();
     let is_hls = lower_url.contains(".m3u8");
     let is_dash = lower_url.contains(".mpd");
+    let needs_cookie_proxy = target_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("cookie"));
+
+    // If no Cookie header is required and it's a direct video file (not DASH/HLS),
+    // return the direct CDN URL so the browser streams/downloads at 100% CDN speed
+    // without any extra redirect or tunnel hop!
+    if !needs_cookie_proxy && !is_dash && !is_hls {
+        return Ok(Json(ResolveResponse {
+            stream_url: target_url.clone(),
+            download_url: target_url,
+            is_hls,
+            is_dash,
+            filename,
+        }));
+    }
+
     let token = state
         .register_stream_target(StreamTarget {
             url: target_url,

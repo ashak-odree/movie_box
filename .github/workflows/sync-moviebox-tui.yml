@@ -49,3 +49,4 @@ jobs:
           git add MovieBox-TUI
           git commit -m "chore: sync MovieBox-TUI to ${{ env.NEW_SHA }}"
           git push origin main
+
