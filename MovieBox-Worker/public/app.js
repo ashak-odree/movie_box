@@ -557,6 +557,33 @@
     }
   }
 
+  function toggleFullscreen() {
+    const wrap = $("player-video-wrap");
+    const video = $("video-player");
+    if (!wrap || !video) return;
+
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+      return;
+    }
+
+    if (video.requestFullscreen) {
+      video.requestFullscreen().catch(() => {
+        wrap.requestFullscreen?.().catch(() => {});
+      });
+    } else if (video.webkitEnterFullscreen) {
+      video.webkitEnterFullscreen();
+    } else if (video.webkitRequestFullscreen) {
+      video.webkitRequestFullscreen();
+    } else if (wrap.requestFullscreen) {
+      wrap.requestFullscreen().catch(() => {});
+    }
+  }
+
   function closePlayer() {
     const video = $("video-player");
     video.pause();
@@ -640,6 +667,7 @@
   };
   $("btn-search").onclick = () => performSearch($("search-input").value);
   $("btn-close-player").onclick = closePlayer;
+  if ($("btn-fullscreen-player")) $("btn-fullscreen-player").onclick = toggleFullscreen;
   $("btn-help").onclick = () => $("help-modal").classList.remove("hidden");
   $("btn-close-help").onclick = () => $("help-modal").classList.add("hidden");
 
@@ -744,6 +772,9 @@
       setStatus(`Theme: ${next}`);
     } else if (e.key === "u") {
       triggerUpdateCheck();
+    } else if (e.key === "f" && !$("player-modal").classList.contains("hidden")) {
+      e.preventDefault();
+      toggleFullscreen();
     } else if (e.key === "?") {
       $("help-modal").classList.toggle("hidden");
     }

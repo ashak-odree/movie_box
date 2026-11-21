@@ -83,8 +83,14 @@
       <div id="suggest-box" class="suggest-box hidden"></div>
     </section>
 
+    <!-- Mobile Pane Switcher (visible only on mobile/tablet) -->
+    <div class="mobile-view-tabs tui-box">
+      <button id="tab-mobile-catalog" class="mobile-tab active">[ 1: Catalog List ]</button>
+      <button id="tab-mobile-details" class="mobile-tab">[ 2: Details &amp; Streams ]</button>
+    </div>
+
     <!-- Main 2-Pane TUI Workspace -->
-    <main class="tui-workspace">
+    <main id="tui-workspace" class="tui-workspace" data-mobile-view="catalog">
       <!-- Left Pane: Catalog / Search Results -->
       <section class="tui-pane tui-box catalog-pane">
         <div class="pane-header">
@@ -97,7 +103,10 @@
       <!-- Right Pane: Details & Streams -->
       <section class="tui-pane tui-box details-pane">
         <div class="pane-header">
-          <span id="details-title" class="pane-title">─ Details ─</span>
+          <div class="pane-header-left">
+            <button id="btn-mobile-back" class="tui-btn mobile-only">[← Back]</button>
+            <span id="details-title" class="pane-title">─ Details ─</span>
+          </div>
           <span id="details-meta" class="pane-meta"></span>
         </div>
         <div id="details-body" class="details-body">
@@ -130,12 +139,13 @@
       <div class="modal-header">
         <span id="player-title" class="pane-title">▶ Stream</span>
         <div class="modal-actions">
-          <a id="player-download-link" class="tui-btn" href="#" download>[ ↓ Download ]</a>
+          <button id="btn-fullscreen-player" class="tui-btn tui-btn-primary" title="Toggle Fullscreen (f)">[ ⛶ Fullscreen ]</button>
+          <a id="player-download-link" class="tui-btn tui-btn-green" href="#" download>[ ↓ Download ]</a>
           <button id="btn-close-player" class="tui-btn tui-btn-danger">[Esc Close]</button>
         </div>
       </div>
-      <div class="player-video-wrap">
-        <video id="video-player" controls autoplay playsinline crossorigin="anonymous"></video>
+      <div id="player-video-wrap" class="player-video-wrap">
+        <video id="video-player" controls autoplay playsinline></video>
       </div>
       <div id="player-subtitles" class="player-subtitles"></div>
     </div>
