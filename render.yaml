@@ -2,6 +2,7 @@ services:
   - type: web
     name: moviebox-web
     runtime: docker
+    region: singapore
     plan: free
     dockerfilePath: ./Dockerfile
     envVars:
@@ -11,3 +12,4 @@ services:
         value: "mamamiakoi"
       - key: AUTO_UPDATE_ENABLED
         value: "false"
+
