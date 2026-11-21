@@ -54,6 +54,17 @@
     const mirror = release.mirrors?.[0];
     const url = mirror?.resolver_url;
     if (!url) return null;
+
+    if (release.provider === "embed") {
+      return {
+        stream_url: url,
+        download_url: url,
+        is_embed: true,
+        is_hls: false,
+        is_dash: false,
+        filename,
+      };
+    }
     const headers = mirror.headers || [];
     const lower = url.toLowerCase();
     const isDash = lower.includes(".mpd");
@@ -158,6 +169,12 @@
   async function loadProviders() {
     try {
       state.providers = await apiFetch("/api/providers");
+      if (
+        state.providers.length &&
+        !state.providers.some((p) => p.id === state.activeProvider)
+      ) {
+        state.activeProvider = state.providers[0].id;
+      }
       renderProviders();
     } catch (e) {
       setStatus(`Failed to load providers: ${e.message}`);
@@ -177,7 +194,7 @@
         const q = $("search-input").value.trim();
         if (q) {
           performSearch(q);
-        } else if (p.id === "moviebox") {
+        } else if (p.id === "moviebox" || p.id === "movies" || p.id === "series" || p.id === "all") {
           loadHomepage();
         } else {
           setStatus(`Switched to ${p.label}. Type a query to search.`);
@@ -190,9 +207,14 @@
   async function loadHomepage() {
     setMobileView("catalog");
     setStatus("Loading trending catalog...");
-    $("catalog-title").textContent = "─ Trending / Home ─";
+    $("catalog-title").textContent =
+      state.activeProvider === "series"
+        ? "─ Trending TV Series ─"
+        : "─ Trending Movies ─";
     try {
-      const data = await apiFetch("/api/homepage?page=1");
+      const data = await apiFetch(
+        `/api/homepage?provider=${encodeURIComponent(state.activeProvider)}&page=1`
+      );
       state.items = data.items || [];
       state.selectedIndex = 0;
       renderCatalog();
@@ -440,7 +462,12 @@
           const lang = rel.language ? escapeHtml(rel.language) : "";
           const label = rel.filename?.trim() || `${d.title} ${rel.quality || ""}`.trim();
           const edgeObj = buildEdgeUrls(rel, label);
-          const speedBadge = edgeObj ? `<span class="badge">⚡ EDGE CDN</span>` : "";
+          const isEmbed = rel.provider === "embed";
+          const speedBadge = isEmbed
+            ? `<span class="badge" style="color:var(--accent)">⚡ INSTANT</span>`
+            : edgeObj
+              ? `<span class="badge">⚡ EDGE CDN</span>`
+              : "";
           const meta = [quality, codec, lang, size].filter(Boolean).join(" • ");
           return `
             <div class="stream-row">
@@ -449,9 +476,13 @@
                 <div class="stream-sub">${meta || escapeHtml(rel.provider)}</div>
               </div>
               <div class="stream-actions">
-                <button class="tui-btn tui-btn-primary" data-stream-idx="${idx}">▶ Stream</button>
-                <button class="tui-btn tui-btn-green" data-dl-idx="${idx}">↓ Download</button>
-                <button class="tui-btn" data-copy-idx="${idx}" title="Copy direct link for IDM/1DM/VLC">📋</button>
+                <button class="tui-btn tui-btn-primary" data-stream-idx="${idx}">▶ Play Now</button>
+                ${
+                  isEmbed
+                    ? `<button class="tui-btn tui-btn-green" data-dl-idx="${idx}">↗ New Tab</button>`
+                    : `<button class="tui-btn tui-btn-green" data-dl-idx="${idx}">↓ Download</button>`
+                }
+                <button class="tui-btn" data-copy-idx="${idx}" title="Copy link">📋</button>
               </div>
             </div>
           `;
@@ -489,18 +520,25 @@
     const fallbackName = `${d?.title || "movie"}_${release?.quality || "video"}.mp4`.replace(/\s+/g, "_");
     const filename = release?.filename?.trim() || fallbackName;
 
-    // Fast path: 0ms Cloudflare Edge CDN stream/download (bypasses home tunnel & fixes 428 UA block!)
+    // Fast path: 0ms Edge / Embed stream/download
     const edgeResolved = buildEdgeUrls(release, filename);
     if (edgeResolved) {
       if (mode === "download") {
+        if (edgeResolved.is_embed) {
+          window.open(edgeResolved.stream_url, "_blank", "noopener,noreferrer");
+          setStatus(`Opened ${filename} in new tab.`);
+          return;
+        }
         setStatus(`⚡ Edge CDN download started: ${filename}`);
         triggerBrowserDownload(edgeResolved.download_url, filename);
         return;
       }
       if (mode === "copy") {
-        const absUrl = `${location.origin}${edgeResolved.download_url}`;
+        const absUrl = edgeResolved.stream_url.startsWith("http")
+          ? edgeResolved.stream_url
+          : `${location.origin}${edgeResolved.download_url}`;
         await navigator.clipboard.writeText(absUrl).catch(() => {});
-        setStatus("⚡ Edge CDN download link copied (paste in IDM / 1DM / VLC)!");
+        setStatus("⚡ Link copied to clipboard!");
         return;
       }
       openPlayer(d?.title || filename, edgeResolved, release);
@@ -536,10 +574,20 @@
   async function openPlayer(title, resolved, release) {
     const modal = $("player-modal");
     const video = $("video-player");
+    const wrap = $("player-video-wrap");
     $("player-title").textContent = `▶ ${title}`;
-    $("player-download-link").href = resolved.download_url;
-    $("player-download-link").download = resolved.filename;
-    $("player-subtitles").innerHTML = `<span class="muted">Loading subtitles...</span>`;
+
+    const dlLink = $("player-download-link");
+    if (resolved.is_embed) {
+      dlLink.href = resolved.stream_url;
+      dlLink.removeAttribute("download");
+      dlLink.target = "_blank";
+      dlLink.textContent = "[ ↗ Open Tab ]";
+    } else {
+      dlLink.href = resolved.download_url;
+      dlLink.download = resolved.filename || "movie.mp4";
+      dlLink.textContent = "[ ↓ Download ]";
+    }
 
     if (state.hlsInstance) {
       state.hlsInstance.destroy();
@@ -549,10 +597,49 @@
       state.dashInstance.reset();
       state.dashInstance = null;
     }
-    if (state.dashInstance) {
-      state.dashInstance.reset();
-      state.dashInstance = null;
+
+    const oldIframe = $("embed-player-frame");
+    if (oldIframe) oldIframe.remove();
+    const oldNotice = $("player-codec-notice");
+    if (oldNotice) oldNotice.remove();
+
+    if (resolved.is_embed) {
+      video.pause();
+      video.removeAttribute("src");
+      video.classList.add("hidden");
+
+      const iframe = document.createElement("iframe");
+      iframe.id = "embed-player-frame";
+      iframe.className = "embed-iframe";
+      iframe.src = resolved.stream_url;
+      iframe.allowFullscreen = true;
+      iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
+      iframe.setAttribute("referrerpolicy", "origin");
+      wrap.appendChild(iframe);
+
+      // Render 1-click server switcher bar below player
+      const servers = (state.currentReleases || []).filter((r) => r.provider === "embed");
+      if (servers.length > 1) {
+        $("player-subtitles").innerHTML = `<span>Switch Server:</span>`;
+        servers.forEach((srv, idx) => {
+          const btn = document.createElement("button");
+          btn.className = `tui-btn ${srv === release ? "tui-btn-primary" : ""}`;
+          btn.textContent = `S${idx + 1}`;
+          btn.title = srv.filename;
+          btn.onclick = () => resolveAndAct(srv, "stream");
+          $("player-subtitles").appendChild(btn);
+        });
+      } else {
+        $("player-subtitles").innerHTML = `<span class="muted">Use player controls for subtitles &amp; quality.</span>`;
+      }
+
+      modal.classList.remove("hidden");
+      setStatus(`Playing: ${title} (${release.filename})`);
+      return;
     }
+
+    video.classList.remove("hidden");
+    $("player-subtitles").innerHTML = `<span class="muted">Loading subtitles...</span>`;
 
     video.innerHTML = "";
     const oldNotice = $("player-codec-notice");
@@ -711,6 +798,15 @@
       return;
     }
 
+    if ($("embed-player-frame")) {
+      if (wrap.requestFullscreen) {
+        wrap.requestFullscreen().catch(() => {});
+      } else if (wrap.webkitRequestFullscreen) {
+        wrap.webkitRequestFullscreen();
+      }
+      return;
+    }
+
     if (video.requestFullscreen) {
       video.requestFullscreen().catch(() => {
         wrap.requestFullscreen?.().catch(() => {});
@@ -725,7 +821,10 @@
   }
 
   function closePlayer() {
+    const oldIframe = $("embed-player-frame");
+    if (oldIframe) oldIframe.remove();
     const video = $("video-player");
+    video.classList.remove("hidden");
     video.pause();
     video.removeAttribute("src");
     video.load();
@@ -819,7 +918,7 @@
   $("search-input").addEventListener("input", () => {
     clearTimeout(suggestTimer);
     const q = $("search-input").value.trim();
-    if (q.length < 2 || state.activeProvider !== "moviebox") {
+    if (q.length < 2) {
       $("suggest-box").classList.add("hidden");
       return;
     }

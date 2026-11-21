@@ -1,5 +1,4 @@
 name = "moviebox"
-account_id = "1604e0d6dab2f716d783fc0b6b7e7b85"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 workers_dev = true
@@ -11,5 +10,4 @@ binding = "ASSETS"
 [vars]
 PASSCODE = "mamamiakoi"
 SESSION_SECRET = "moviebox-tui-web-secret-key-2026"
-BACKEND_URL = "https://rental-safari-protection-advocacy.trycloudflare.com"
 

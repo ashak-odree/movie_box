@@ -1,94 +1,19 @@
 import {
-  getCaptions,
-  getDetails,
-  getHomepage,
-  getStreams,
-  searchMovieBox,
-  suggestMovieBox,
-} from "./moviebox";
+  getCinemetaDetails,
+  getCinemetaHomepage,
+  getEmbedStreams,
+  searchCinemeta,
+  suggestCinemeta,
+} from "./cinemeta";
 
 export interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
   PASSCODE: string;
   SESSION_SECRET: string;
-  BACKEND_URL?: string;
 }
 
 const SESSION_COOKIE = "mb_session";
 const SESSION_TTL_SEC = 7 * 24 * 3600;
-const backendResolveCache = new Map<string, { stream_url: string; download_url: string }>();
-
-async function proxyViaBackend(
-  backendBase: string,
-  targetUrl: string,
-  headers: [string, string][],
-  filename: string,
-  isDownload: boolean,
-  req: Request
-): Promise<Response> {
-  const base = backendBase.replace(/\/$/, "");
-  const cookieHdr = req.headers.get("Cookie") || "";
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let resolved = backendResolveCache.get(targetUrl);
-
-    if (!resolved) {
-      const resResp = await fetch(`${base}/api/resolve`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookieHdr,
-        },
-        body: JSON.stringify({ url: targetUrl, headers, filename }),
-      });
-      if (!resResp.ok) {
-        return new Response(resResp.body, { status: resResp.status, headers: resResp.headers });
-      }
-      resolved = (await resResp.json()) as { stream_url: string; download_url: string };
-      if (backendResolveCache.size > 300) backendResolveCache.clear();
-      backendResolveCache.set(targetUrl, resolved);
-    }
-
-    const pathAndQuery = isDownload ? resolved.download_url : resolved.stream_url;
-    const fwdHeaders = new Headers();
-    if (cookieHdr) fwdHeaders.set("Cookie", cookieHdr);
-
-    let range = req.headers.get("Range");
-    // Cap open-ended browser video ranges (e.g. "bytes=0-") to 4MB chunks
-    // so aborted probes don't clog the cloudflared tunnel with a 1GB stream and trigger 502!
-    if (!isDownload) {
-      if (!range) {
-        range = "bytes=0-4194303";
-      } else {
-        const m = /^bytes=(\d+)-$/i.exec(range.trim());
-        if (m) {
-          const start = Number(m[1]);
-          range = `bytes=${start}-${start + 4194303}`;
-        }
-      }
-    }
-    if (range) fwdHeaders.set("Range", range);
-
-    try {
-      const upstream = await fetch(`${base}${pathAndQuery}`, {
-        method: "GET",
-        headers: fwdHeaders,
-      });
-      if ((upstream.status === 404 || upstream.status >= 500) && attempt === 0) {
-        backendResolveCache.delete(targetUrl);
-        continue;
-      }
-      return new Response(upstream.body, {
-        status: upstream.status,
-        headers: upstream.headers,
-      });
-    } catch (err) {
-      backendResolveCache.delete(targetUrl);
-      if (attempt === 1) throw err;
-    }
-  }
-  return json({ error: "Backend stream proxy failed" }, 502);
-}
 
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>) {
   return new Response(JSON.stringify(data), {
@@ -123,11 +48,7 @@ async function hmacSign(secret: string, payload: string): Promise<string> {
     false,
     ["sign"]
   );
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(payload)
-  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
   return b64urlEncode(new Uint8Array(sig));
 }
 
@@ -171,48 +92,6 @@ async function isAuthenticated(req: Request, env: Env): Promise<boolean> {
   return Math.floor(Date.now() / 1000) - data.iat < SESSION_TTL_SEC;
 }
 
-function srtToVtt(srt: string): string {
-  const lines = srt.split(/\r?\n/).map((l) =>
-    l.includes("-->") ? l.replace(/,/g, ".") : l
-  );
-  return `WEBVTT\n\n${lines.join("\n")}`;
-}
-
-async function proxyUpstream(
-  url: string,
-  headersList: [string, string][],
-  req: Request,
-  attachmentName?: string
-): Promise<Response> {
-  const fwd = new Headers();
-  let hasUa = false;
-  for (const [k, v] of headersList || []) {
-    if (k.toLowerCase() === "user-agent") hasUa = true;
-    fwd.set(k, v);
-  }
-  if (!hasUa) {
-    fwd.set("User-Agent", "MovieBox-Tui/0.1.30");
-  }
-  const range = req.headers.get("Range");
-  if (range) fwd.set("Range", range);
-
-  const upstream = await fetch(url, { headers: fwd });
-  const outHeaders = new Headers();
-  for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) {
-    const val = upstream.headers.get(h);
-    if (val) outHeaders.set(h, val);
-  }
-  outHeaders.set("Access-Control-Allow-Origin", "*");
-  if (attachmentName) {
-    const safe = attachmentName.replace(/[^a-zA-Z0-9._ -]/g, "_");
-    outHeaders.set("Content-Disposition", `attachment; filename="${safe}"`);
-  }
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: outHeaders,
-  });
-}
-
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -226,84 +105,8 @@ export default {
       return env.ASSETS.fetch(req);
     }
 
-    // Handle video streaming & downloading directly at Cloudflare Edge (100Gbps)
-    // so video bytes NEVER bottleneck through the home cloudflared tunnel,
-    // and replace browser Mozilla/5.0 User-Agent with MovieBox-Tui/0.1.30 so CDN never returns 428!
-    if (path === "/api/edge-stream" || path === "/api/edge-download") {
-      try {
-        const isDownload = path === "/api/edge-download";
-        const uB64 = url.searchParams.get("u") || "";
-        const hB64 = url.searchParams.get("h") || "";
-        const fname = url.searchParams.get("n") || "movie.mp4";
-        const targetUrl = new TextDecoder().decode(b64urlDecode(uB64));
-        const headers: [string, string][] = hB64
-          ? JSON.parse(new TextDecoder().decode(b64urlDecode(hB64)))
-          : [];
-        if (!targetUrl.startsWith("http")) {
-          return json({ error: "Invalid target url" }, 400);
-        }
-
-        // bcdn.hakunaymatata.com blocks Cloudflare Worker egress IPs with HTTP 427;
-        // route bcdn through BACKEND_URL, while all other CDNs (macdn, sbcdn3, etc.) run at 100Gbps Cloudflare Edge!
-        if (env.BACKEND_URL && targetUrl.includes("bcdn.hakunaymatata.com")) {
-          return await proxyViaBackend(
-            env.BACKEND_URL,
-            targetUrl,
-            headers,
-            fname,
-            isDownload,
-            req
-          );
-        }
-
-        const edgeResp = await proxyUpstream(
-          targetUrl,
-          headers,
-          req,
-          isDownload ? fname : undefined
-        );
-        if (
-          env.BACKEND_URL &&
-          (edgeResp.status === 427 || edgeResp.status === 428 || edgeResp.status === 429 || edgeResp.status === 403)
-        ) {
-          return await proxyViaBackend(
-            env.BACKEND_URL,
-            targetUrl,
-            headers,
-            fname,
-            isDownload,
-            req
-          );
-        }
-        return edgeResp;
-      } catch (e: any) {
-        return json({ error: e?.message || "Edge stream error" }, 502);
-      }
-    }
-
-    if (path.startsWith("/api/edge-manifest/")) {
-      try {
-        const rest = path.slice("/api/edge-manifest/".length);
-        const slash = rest.indexOf("/");
-        if (slash <= 0) return json({ error: "Bad manifest path" }, 400);
-        const payloadB64 = decodeURIComponent(rest.slice(0, slash));
-        const relpath = rest.slice(slash + 1);
-        const data = JSON.parse(new TextDecoder().decode(b64urlDecode(payloadB64))) as {
-          u: string;
-          h: [string, string][];
-        };
-        const upstreamUrl =
-          relpath === "index.mpd" || relpath === "index.m3u8"
-            ? data.u
-            : new URL(relpath, data.u).toString();
-        return proxyUpstream(upstreamUrl, data.h || [], req);
-      } catch (e: any) {
-        return json({ error: e?.message || "Edge manifest error" }, 502);
-      }
-    }
-
     if (path === "/api/health") {
-      return json({ ok: true });
+      return json({ ok: true, mode: "self-sufficient-edge" });
     }
 
     if (path === "/api/auth/check") {
@@ -337,29 +140,6 @@ export default {
       );
     }
 
-    if (env.BACKEND_URL) {
-      try {
-        const target = `${env.BACKEND_URL.replace(/\/$/, "")}${path}${url.search}`;
-        const fwdHeaders = new Headers(req.headers);
-        fwdHeaders.delete("host");
-        fwdHeaders.set("Authorization", `Bearer ${env.PASSCODE}`);
-        const resp = await fetch(target, {
-          method: req.method,
-          headers: fwdHeaders,
-          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-          redirect: "manual",
-        });
-        if (resp.status !== 530 && resp.status !== 502 && resp.status !== 504 && resp.status !== 521) {
-          return new Response(resp.body, {
-            status: resp.status,
-            headers: resp.headers,
-          });
-        }
-      } catch {
-        // Fall back to Worker standalone handlers if tunnel is offline
-      }
-    }
-
     if (!(await isAuthenticated(req, env))) {
       return json({ authenticated: false, error: "Authentication required" }, 401);
     }
@@ -367,97 +147,53 @@ export default {
     try {
       if (path === "/api/providers") {
         return json([
-          { id: "moviebox", label: "MovieBox", is_bdix: false },
+          { id: "movies", label: "Movies", is_bdix: false },
+          { id: "series", label: "TV Series", is_bdix: false },
+          { id: "all", label: "All", is_bdix: false },
         ]);
       }
 
       if (path === "/api/homepage") {
+        const provider = url.searchParams.get("provider") || "movies";
         const page = Number(url.searchParams.get("page") || "1") || 1;
-        return json(await getHomepage(page));
+        return json(await getCinemetaHomepage(provider, page));
       }
 
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim();
+        const provider = url.searchParams.get("provider") || "all";
         const page = Number(url.searchParams.get("page") || "1") || 1;
         if (!q) return json({ items: [] });
-        return json(await searchMovieBox(q, page));
+        return json(await searchCinemeta(q, provider, page));
       }
 
       if (path === "/api/suggest") {
         const q = (url.searchParams.get("q") || "").trim();
         if (!q) return json([]);
-        return json(await suggestMovieBox(q));
+        return json(await suggestCinemeta(q));
       }
 
       if (path === "/api/details") {
         const id = url.searchParams.get("id") || "";
-        return json(await getDetails(id));
+        return json(await getCinemetaDetails(id));
       }
 
       if (path === "/api/streams") {
         const id = url.searchParams.get("id") || "";
         const season = Number(url.searchParams.get("season") || "0") || 0;
         const episode = Number(url.searchParams.get("episode") || "0") || 0;
-        return json(await getStreams(id, season, episode));
-      }
-
-      if (path === "/api/resolve" && req.method === "POST") {
-        const body: any = await req.json().catch(() => ({}));
-        const rel = body?.release;
-        const mirror = rel?.mirrors?.[0];
-        const targetUrl = body?.url || mirror?.resolver_url;
-        if (!targetUrl) return json({ error: "No stream URL found" }, 404);
-        const headers: [string, string][] = body?.headers?.length ? body.headers : (mirror?.headers || []);
-        const filename = body?.filename || rel?.filename || "video.mp4";
-        const lower = targetUrl.toLowerCase();
-        const isHls = lower.includes(".m3u8");
-        const isDash = lower.includes(".mpd");
-
-        const token = await signPayload(env.SESSION_SECRET, {
-          url: targetUrl,
-          headers,
-          filename,
-          exp: Math.floor(Date.now() / 1000) + 6 * 3600,
-        });
-
-        const streamUrl = isDash
-          ? `/api/manifest/${encodeURIComponent(token)}/index.mpd`
-          : isHls
-            ? `/api/manifest/${encodeURIComponent(token)}/index.m3u8`
-            : `/api/stream?token=${encodeURIComponent(token)}`;
-
-        return json({
-          stream_url: streamUrl,
-          download_url: `/api/download?token=${encodeURIComponent(token)}&filename=${encodeURIComponent(filename)}`,
-          is_hls: isHls,
-          is_dash: isDash,
-          filename,
-        });
+        return json(getEmbedStreams(id, season, episode));
       }
 
       if (path === "/api/captions") {
-        const id = url.searchParams.get("id") || "";
-        const rid = url.searchParams.get("resource_id") || "";
-        const subs = await getCaptions(id, rid);
-        const out = await Promise.all(
-          subs.map(async (s: any) => {
-            const token = await signPayload(env.SESSION_SECRET, {
-              url: s.url,
-              headers: [],
-              filename: `${s.name}.vtt`,
-              exp: Math.floor(Date.now() / 1000) + 6 * 3600,
-            });
-            return { name: s.name, url: `/api/stream?token=${encodeURIComponent(token)}&vtt=1` };
-          })
-        );
-        return json(out);
+        return json([]);
       }
 
       if (path === "/api/poster") {
         const imgUrl = url.searchParams.get("url") || "";
         if (!imgUrl) return json({ error: "Missing url" }, 400);
         const resp = await fetch(imgUrl, {
-          headers: { "User-Agent": "MovieBox-Tui/0.1.30" },
+          headers: { "User-Agent": "MovieBox-TUI-Web/1.0" },
         });
         return new Response(resp.body, {
           status: resp.status,
@@ -466,62 +202,6 @@ export default {
             "Cache-Control": "public, max-age=86400",
           },
         });
-      }
-
-      if (path === "/api/stream") {
-        const token = url.searchParams.get("token") || "";
-        const target = await verifyPayload<{ url: string; headers: [string, string][]; exp: number }>(
-          env.SESSION_SECRET,
-          token
-        );
-        if (!target) return json({ error: "Invalid stream token" }, 404);
-
-        if (url.searchParams.get("vtt") === "1") {
-          const resp = await fetch(target.url, { headers: { "User-Agent": "MovieBox-Tui/0.1.30" } });
-          const text = await resp.text();
-          const body = text.trimStart().startsWith("WEBVTT") ? text : srtToVtt(text);
-          return new Response(body, {
-            headers: { "Content-Type": "text/vtt; charset=utf-8" },
-          });
-        }
-
-        if (!target.headers || target.headers.length === 0) {
-          return Response.redirect(target.url, 307);
-        }
-        return proxyUpstream(target.url, target.headers, req);
-      }
-
-      if (path.startsWith("/api/manifest/")) {
-        const rest = path.slice("/api/manifest/".length);
-        const slash = rest.indexOf("/");
-        if (slash <= 0) return json({ error: "Bad manifest path" }, 400);
-        const token = decodeURIComponent(rest.slice(0, slash));
-        const relpath = rest.slice(slash + 1);
-        const target = await verifyPayload<{ url: string; headers: [string, string][]; exp: number }>(
-          env.SESSION_SECRET,
-          token
-        );
-        if (!target) return json({ error: "Invalid manifest token" }, 404);
-
-        const upstreamUrl =
-          relpath === "index.mpd" || relpath === "index.m3u8"
-            ? target.url
-            : new URL(relpath, target.url).toString();
-        return proxyUpstream(upstreamUrl, target.headers, req);
-      }
-
-      if (path === "/api/download") {
-        const token = url.searchParams.get("token") || "";
-        const target = await verifyPayload<{ url: string; headers: [string, string][]; filename?: string }>(
-          env.SESSION_SECRET,
-          token
-        );
-        if (!target) return json({ error: "Invalid download token" }, 404);
-        if (!target.headers || target.headers.length === 0) {
-          return Response.redirect(target.url, 307);
-        }
-        const fname = url.searchParams.get("filename") || target.filename || "movie.mp4";
-        return proxyUpstream(target.url, target.headers, req, fname);
       }
 
       if (path === "/api/updater/status" || path === "/api/updater/check") {
@@ -533,11 +213,11 @@ export default {
         const sha = (gh as any)?.sha ? String((gh as any).sha).slice(0, 7) : null;
         const st = {
           enabled: true,
-          interval_secs: 1800,
+          interval_secs: 86400,
           current_commit: sha,
           remote_commit: sha,
           last_checked_unix: Math.floor(Date.now() / 1000),
-          state: "up_to_date",
+          state: "edge_live",
           last_error: null,
         };
         return json(path.endsWith("/check") ? { updated: false, status: st } : st);
@@ -549,4 +229,3 @@ export default {
     }
   },
 };
-
