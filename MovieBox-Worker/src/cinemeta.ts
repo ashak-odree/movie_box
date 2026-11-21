@@ -154,39 +154,39 @@ export function getEmbedStreams(rawId: string, season = 0, episode = 0) {
 
   const servers = [
     {
-      name: `Server 1 · VidSrc.cc (${tag})`,
+      name: `Server 1 · VidSrc.su (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://vidsrc.cc/v2/embed/tv/${imdbId}/${s}/${e}`
-        : `https://vidsrc.cc/v2/embed/movie/${imdbId}`,
+        ? `https://vidsrc.su/embed/tv/${imdbId}/${s}/${e}`
+        : `https://vidsrc.su/embed/movie/${imdbId}`,
     },
     {
-      name: `Server 2 · VidLink.pro (${tag})`,
+      name: `Server 2 · MultiEmbed (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://vidlink.pro/tv/${imdbId}/${s}/${e}`
-        : `https://vidlink.pro/movie/${imdbId}`,
+        ? `https://multiembed.mov/?video_id=${imdbId}&s=${s}&e=${e}`
+        : `https://multiembed.mov/?video_id=${imdbId}`,
     },
     {
-      name: `Server 3 · VidSrc.xyz (${tag})`,
+      name: `Server 3 · AutoEmbed (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://vidsrc.xyz/embed/tv/${imdbId}/${s}-${e}`
-        : `https://vidsrc.xyz/embed/movie/${imdbId}`,
+        ? `https://autoembed.co/tv/imdb/${imdbId}-${s}-${e}`
+        : `https://autoembed.co/movie/imdb/${imdbId}`,
     },
     {
-      name: `Server 4 · AutoEmbed (${tag})`,
+      name: `Server 4 · 2Embed (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://player.autoembed.cc/embed/tv/${imdbId}/${s}/${e}`
-        : `https://player.autoembed.cc/embed/movie/${imdbId}`,
+        ? `https://www.2embed.cc/embedtv/${imdbId}&s=${s}&e=${e}`
+        : `https://www.2embed.cc/embed/${imdbId}`,
     },
     {
-      name: `Server 5 · SmashyStream (${tag})`,
-      quality: "HD",
+      name: `Server 5 · VidSrc.in (${tag})`,
+      quality: "1080p",
       url: isTv
-        ? `https://player.smashy.stream/tv/${imdbId}?s=${s}&e=${e}`
-        : `https://player.smashy.stream/movie/${imdbId}`,
+        ? `https://vidsrc.in/embed/tv?imdb=${imdbId}&season=${s}&episode=${e}`
+        : `https://vidsrc.in/embed/movie?imdb=${imdbId}`,
     },
   ];
 
@@ -210,3 +210,4 @@ export function getEmbedStreams(rawId: string, season = 0, episode = 0) {
     ],
   }));
 }
+
