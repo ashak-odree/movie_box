@@ -642,8 +642,6 @@
     $("player-subtitles").innerHTML = `<span class="muted">Loading subtitles...</span>`;
 
     video.innerHTML = "";
-    const oldNotice = $("player-codec-notice");
-    if (oldNotice) oldNotice.remove();
 
     function handleUndecodableVideo() {
       // 1. Try native H.264 stream first if one exists
