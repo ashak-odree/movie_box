@@ -64,9 +64,11 @@
       streamUrl = `/api/edge-stream?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
     }
     const downloadUrl = `/api/edge-download?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}&n=${encodeURIComponent(filename)}`;
+    const transcodeUrl = `/api/transcode?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
     return {
       stream_url: streamUrl,
       download_url: downloadUrl,
+      transcode_url: transcodeUrl,
       is_hls: isHls,
       is_dash: isDash,
       filename,
@@ -527,15 +529,33 @@
     const oldNotice = $("player-codec-notice");
     if (oldNotice) oldNotice.remove();
 
-    video.onerror = () => {
-      // If an H.264 stream exists and we haven't tried auto-switching yet, switch automatically!
+    function handleUndecodableVideo() {
+      // 1. Try native H.264 stream first if one exists
       const h264Fallback = (state.currentReleases || []).find(
         (r) => r !== release && !/hevc|h265|265/i.test(r.codec || r.filename || "")
       );
       if (h264Fallback && !release._retriedH264) {
+        release._retriedH264 = true;
         h264Fallback._retriedH264 = true;
-        setStatus("HEVC not supported by browser; auto-switching to H.264 stream...");
+        setStatus("HEVC video not decoded by browser; switching to native H.264 stream...");
         resolveAndAct(h264Fallback, "stream");
+        return;
+      }
+
+      // 2. Otherwise, auto-switch to live server FFmpeg HEVC -> H.264 transcoding!
+      if (resolved.transcode_url && !release._usingTranscode) {
+        release._usingTranscode = true;
+        if (state.hlsInstance) {
+          state.hlsInstance.destroy();
+          state.hlsInstance = null;
+        }
+        if (state.dashInstance) {
+          state.dashInstance.reset();
+          state.dashInstance = null;
+        }
+        setStatus("⚡ Browser lacks HEVC video decoder — live transcoding HEVC → H.264...");
+        video.src = resolved.transcode_url;
+        video.play().catch(() => {});
         return;
       }
 
@@ -572,7 +592,21 @@
           };
         }
       }
+    }
+
+    // When Chrome plays AAC audio from an HEVC MP4, video.onerror does NOT fire,
+    // but video.videoWidth stays 0! Detect that and auto-transcode to H.264!
+    video.onloadedmetadata = () => {
+      if (video.videoWidth === 0 && !release._usingTranscode) {
+        handleUndecodableVideo();
+      }
     };
+    video.onloadeddata = () => {
+      if (video.videoWidth === 0 && !release._usingTranscode) {
+        handleUndecodableVideo();
+      }
+    };
+    video.onerror = handleUndecodableVideo;
 
     if (resolved.is_dash && window.dashjs) {
       const dash = window.dashjs.MediaPlayer().create();

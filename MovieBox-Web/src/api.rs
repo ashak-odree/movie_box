@@ -727,6 +727,88 @@ pub async fn edge_download(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+pub async fn transcode(Query(q): Query<EdgeStreamQuery>) -> Result<Response, ApiError> {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    use tokio::process::Command;
+
+    let url = String::from_utf8(decode_b64url(&q.u)?)
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let headers: Vec<(String, String)> = match q.h.as_deref().filter(|s| !s.is_empty()) {
+        Some(h_b64) => serde_json::from_slice(&decode_b64url(h_b64)?).unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    cmd.args(["-user_agent", moviebox_tui::net::APP_HTTP_USER_AGENT]);
+
+    if !headers.is_empty() {
+        let mut hdr_lines = String::new();
+        for (k, v) in &headers {
+            if !k.eq_ignore_ascii_case("user-agent") {
+                hdr_lines.push_str(&format!("{k}: {v}\r\n"));
+            }
+        }
+        if !hdr_lines.is_empty() {
+            cmd.args(["-headers", &hdr_lines]);
+        }
+    }
+
+    cmd.args([
+        "-i",
+        &url,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-crf",
+        "26",
+        "-vf",
+        "format=yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
+        "pipe:1",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .kill_on_drop(true);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, format!("ffmpeg failed: {e}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "No ffmpeg stdout"))?;
+
+    let stream = futures::stream::unfold((child, stdout), |(child, mut stdout)| async move {
+        let mut buf = vec![0u8; 32 * 1024];
+        match stdout.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::from(buf)), (child, stdout)))
+            }
+            Err(e) => Some((Err(e), (child, stdout))),
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from_stream(stream))
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 pub async fn updater_status(State(state): State<AppState>) -> Json<crate::state::UpdateStatus> {
     let st = state.update_status.read().await.clone();
     Json(st)
