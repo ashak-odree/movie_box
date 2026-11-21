@@ -1,0 +1,51 @@
+name: Daily Sync MovieBox-TUI
+
+on:
+  schedule:
+    # Runs once every day at 03:00 UTC (09:00 AM Bangladesh Time)
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout movie_box
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Pull latest MovieBox-TUI upstream
+        run: |
+          git submodule update --remote --merge MovieBox-TUI
+          if git diff --quiet MovieBox-TUI; then
+            echo "UPDATED=false" >> "$GITHUB_ENV"
+            echo "MovieBox-TUI is already up to date."
+          else
+            NEW_SHA=$(git -C MovieBox-TUI rev-parse --short HEAD)
+            echo "UPDATED=true" >> "$GITHUB_ENV"
+            echo "NEW_SHA=$NEW_SHA" >> "$GITHUB_ENV"
+            echo "MovieBox-TUI updated to $NEW_SHA"
+          fi
+
+      - name: Setup Rust (for compile verification)
+        if: env.UPDATED == 'true'
+        uses: dtolnay/rust-toolchain@1.90
+
+      - name: Verify MovieBox-Web compiles with updated MovieBox-TUI
+        if: env.UPDATED == 'true'
+        working-directory: MovieBox-Web
+        run: cargo check
+
+      - name: Commit and push updated submodule
+        if: env.UPDATED == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MovieBox-TUI
+          git commit -m "chore: sync MovieBox-TUI to ${{ env.NEW_SHA }}"
+          git push origin main

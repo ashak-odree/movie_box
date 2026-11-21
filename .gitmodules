@@ -1,0 +1,3 @@
+[submodule "MovieBox-TUI"]
+	path = MovieBox-TUI
+	url = https://github.com/mesamirh/MovieBox-Tui.git

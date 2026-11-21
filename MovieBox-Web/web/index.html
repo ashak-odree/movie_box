@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mocha">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MovieBox-TUI // Web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js" defer></script>
+</head>
+<body>
+  <!-- Gate Screen ("mamamiakoi") -->
+  <div id="gate-screen" class="gate-screen">
+    <div class="tui-box gate-box">
+      <div class="tui-box-title">┌─ MovieBox-TUI :: Access Gate ─┐</div>
+      <pre class="ascii-logo">
+ __  __            _      ____
+|  \/  | _____   _(_) ___| __ )  _____  __
+| |\/| |/ _ \ \ / / |/ _ \  _ \ / _ \ \/ /
+| |  | | (_) \ V /| |  __/ |_) | (_) >  <
+|_|  |_|\___/ \_/ |_|\___|____/ \___/_/\_\
+      </pre>
+      <p class="gate-hint">Enter passphrase to unlock terminal session:</p>
+      <form id="gate-form" class="gate-form" autocomplete="off">
+        <span class="prompt">guest@moviebox:~$</span>
+        <input
+          id="gate-input"
+          type="password"
+          placeholder="type passphrase..."
+          autofocus
+          spellcheck="false"
+        />
+        <button type="submit" class="tui-btn">[Enter]</button>
+      </form>
+      <div id="gate-error" class="gate-error"></div>
+    </div>
+  </div>
+
+  <!-- Main TUI App -->
+  <div id="app-screen" class="app-screen hidden">
+    <!-- Top Header Bar -->
+    <header class="tui-topbar tui-box">
+      <div class="topbar-left">
+        <span class="brand">[ MovieBox-TUI ]</span>
+        <div id="provider-tabs" class="provider-tabs"></div>
+      </div>
+      <div class="topbar-right">
+        <button id="btn-updater" class="tui-chip" title="Check MovieBox-TUI repo updates">
+          <span class="dot"></span>
+          <span id="updater-label">sync: idle</span>
+        </button>
+        <select id="theme-select" class="tui-select" title="Switch TUI Theme">
+          <option value="mocha">Mocha</option>
+          <option value="latte">Latte</option>
+          <option value="macchiato">Macchiato</option>
+          <option value="frappe">Frappe</option>
+          <option value="nord">Nord</option>
+          <option value="tokyonight">TokyoNight</option>
+          <option value="dracula">Dracula</option>
+          <option value="gruvbox">Gruvbox</option>
+          <option value="rosepine">RosePine</option>
+        </select>
+        <button id="btn-help" class="tui-btn" title="Help (?)">[?]</button>
+        <button id="btn-logout" class="tui-btn tui-btn-danger" title="Lock session">[Lock]</button>
+      </div>
+    </header>
+
+    <!-- Search Bar -->
+    <section class="tui-searchbar tui-box">
+      <span class="search-prefix">[/] Search &gt;</span>
+      <input
+        id="search-input"
+        type="text"
+        placeholder="Search movies, series, anime... (press / to focus, Enter to search)"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="btn-search" class="tui-btn">[Search]</button>
+      <button id="btn-home" class="tui-btn">[Home]</button>
+      <div id="suggest-box" class="suggest-box hidden"></div>
+    </section>
+
+    <!-- Main 2-Pane TUI Workspace -->
+    <main class="tui-workspace">
+      <!-- Left Pane: Catalog / Search Results -->
+      <section class="tui-pane tui-box catalog-pane">
+        <div class="pane-header">
+          <span id="catalog-title" class="pane-title">─ Trending / Home ─</span>
+          <span id="catalog-count" class="pane-meta">0 items</span>
+        </div>
+        <div id="catalog-list" class="catalog-list"></div>
+      </section>
+
+      <!-- Right Pane: Details & Streams -->
+      <section class="tui-pane tui-box details-pane">
+        <div class="pane-header">
+          <span id="details-title" class="pane-title">─ Details ─</span>
+          <span id="details-meta" class="pane-meta"></span>
+        </div>
+        <div id="details-body" class="details-body">
+          <div class="empty-state">
+            <p>Select a movie or series from the left pane.</p>
+            <p class="muted">Use ↑/↓ or j/k to navigate, Enter to inspect, / to search.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Status & Keybind Bar -->
+    <footer class="tui-statusbar tui-box">
+      <div id="status-msg" class="status-msg">Ready.</div>
+      <div class="keybinds">
+        <span><kbd>/</kbd> Search</span>
+        <span><kbd>j</kbd>/<kbd>k</kbd> Move</span>
+        <span><kbd>Enter</kbd> Open</span>
+        <span><kbd>Tab</kbd> Provider</span>
+        <span><kbd>t</kbd> Theme</span>
+        <span><kbd>?</kbd> Help</span>
+        <span><kbd>Esc</kbd> Back</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Video Player Modal -->
+  <div id="player-modal" class="modal hidden">
+    <div class="tui-box modal-box player-box">
+      <div class="modal-header">
+        <span id="player-title" class="pane-title">▶ Stream</span>
+        <div class="modal-actions">
+          <a id="player-download-link" class="tui-btn" href="#" download>[ ↓ Download ]</a>
+          <button id="btn-close-player" class="tui-btn tui-btn-danger">[Esc Close]</button>
+        </div>
+      </div>
+      <div class="player-video-wrap">
+        <video id="video-player" controls autoplay playsinline crossorigin="anonymous"></video>
+      </div>
+      <div id="player-subtitles" class="player-subtitles"></div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="help-modal" class="modal hidden">
+    <div class="tui-box modal-box help-box">
+      <div class="modal-header">
+        <span class="pane-title">─ Keyboard Shortcuts &amp; Info ─</span>
+        <button id="btn-close-help" class="tui-btn">[Esc Close]</button>
+      </div>
+      <div class="help-content">
+        <p><kbd>/</kbd> : Focus search bar</p>
+        <p><kbd>j</kbd> / <kbd>↓</kbd> : Next item</p>
+        <p><kbd>k</kbd> / <kbd>↑</kbd> : Previous item</p>
+        <p><kbd>Enter</kbd> : Load details &amp; streams for selected item</p>
+        <p><kbd>Tab</kbd> : Switch to next provider</p>
+        <p><kbd>t</kbd> : Cycle through all 9 TUI themes</p>
+        <p><kbd>u</kbd> : Check MovieBox-TUI repo for updates</p>
+        <p><kbd>Esc</kbd> : Close modal / clear search</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+

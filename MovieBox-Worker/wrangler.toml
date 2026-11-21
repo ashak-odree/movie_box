@@ -1,0 +1,14 @@
+name = "moviebox"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+PASSCODE = "mamamiakoi"
+SESSION_SECRET = "moviebox-tui-web-secret-key-2026"
+BACKEND_URL = "https://pendant-les-meetings-saves.trycloudflare.com"
+

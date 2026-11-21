@@ -1,0 +1,12 @@
+# Rust build artifacts
+target/
+MovieBox-Web/target/
+
+# Node / Wrangler artifacts
+node_modules/
+.wrangler/
+.dev.vars
+
+# OS / Editor
+.DS_Store
+*.log
