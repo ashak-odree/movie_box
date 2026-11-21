@@ -16,6 +16,52 @@ export interface Env {
 
 const SESSION_COOKIE = "mb_session";
 const SESSION_TTL_SEC = 7 * 24 * 3600;
+const backendResolveCache = new Map<string, { stream_url: string; download_url: string }>();
+
+async function proxyViaBackend(
+  backendBase: string,
+  targetUrl: string,
+  headers: [string, string][],
+  filename: string,
+  isDownload: boolean,
+  req: Request
+): Promise<Response> {
+  const base = backendBase.replace(/\/$/, "");
+  const cookieHdr = req.headers.get("Cookie") || "";
+  let resolved = backendResolveCache.get(targetUrl);
+
+  if (!resolved) {
+    const resResp = await fetch(`${base}/api/resolve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: cookieHdr,
+      },
+      body: JSON.stringify({ url: targetUrl, headers, filename }),
+    });
+    if (!resResp.ok) {
+      return new Response(resResp.body, { status: resResp.status, headers: resResp.headers });
+    }
+    resolved = (await resResp.json()) as { stream_url: string; download_url: string };
+    if (backendResolveCache.size > 300) backendResolveCache.clear();
+    backendResolveCache.set(targetUrl, resolved);
+  }
+
+  const pathAndQuery = isDownload ? resolved.download_url : resolved.stream_url;
+  const fwdHeaders = new Headers();
+  if (cookieHdr) fwdHeaders.set("Cookie", cookieHdr);
+  const range = req.headers.get("Range");
+  if (range) fwdHeaders.set("Range", range);
+
+  const upstream = await fetch(`${base}${pathAndQuery}`, {
+    method: "GET",
+    headers: fwdHeaders,
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: upstream.headers,
+  });
+}
 
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>) {
   return new Response(JSON.stringify(data), {
@@ -145,6 +191,10 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
+    if (path === "/favicon.ico") {
+      return new Response(null, { status: 204 });
+    }
+
     if (!path.startsWith("/api/")) {
       return env.ASSETS.fetch(req);
     }
@@ -154,6 +204,7 @@ export default {
     // and replace browser Mozilla/5.0 User-Agent with MovieBox-Tui/0.1.30 so CDN never returns 428!
     if (path === "/api/edge-stream" || path === "/api/edge-download") {
       try {
+        const isDownload = path === "/api/edge-download";
         const uB64 = url.searchParams.get("u") || "";
         const hB64 = url.searchParams.get("h") || "";
         const fname = url.searchParams.get("n") || "movie.mp4";
@@ -164,12 +215,40 @@ export default {
         if (!targetUrl.startsWith("http")) {
           return json({ error: "Invalid target url" }, 400);
         }
-        return proxyUpstream(
+
+        // bcdn.hakunaymatata.com blocks Cloudflare Worker egress IPs with HTTP 427;
+        // route bcdn through BACKEND_URL, while all other CDNs (macdn, sbcdn3, etc.) run at 100Gbps Cloudflare Edge!
+        if (env.BACKEND_URL && targetUrl.includes("bcdn.hakunaymatata.com")) {
+          return await proxyViaBackend(
+            env.BACKEND_URL,
+            targetUrl,
+            headers,
+            fname,
+            isDownload,
+            req
+          );
+        }
+
+        const edgeResp = await proxyUpstream(
           targetUrl,
           headers,
           req,
-          path === "/api/edge-download" ? fname : undefined
+          isDownload ? fname : undefined
         );
+        if (
+          env.BACKEND_URL &&
+          (edgeResp.status === 427 || edgeResp.status === 428 || edgeResp.status === 429 || edgeResp.status === 403)
+        ) {
+          return await proxyViaBackend(
+            env.BACKEND_URL,
+            targetUrl,
+            headers,
+            fname,
+            isDownload,
+            req
+          );
+        }
+        return edgeResp;
       } catch (e: any) {
         return json({ error: e?.message || "Edge stream error" }, 502);
       }
