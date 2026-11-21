@@ -11,5 +11,5 @@ binding = "ASSETS"
 [vars]
 PASSCODE = "mamamiakoi"
 SESSION_SECRET = "moviebox-tui-web-secret-key-2026"
-BACKEND_URL = "https://pendant-les-meetings-saves.trycloudflare.com"
+BACKEND_URL = "https://rental-safari-protection-advocacy.trycloudflare.com"
 

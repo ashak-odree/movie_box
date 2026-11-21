@@ -233,7 +233,8 @@ function buildHeaders(
   return headers;
 }
 
-let cachedToken: string | null = null;
+let cachedToken: string | null =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjU1MDU4ODEyMjQ0Njk5NjkzMzYsImV4cCI6MTgwMzA1ODQzNywiaWF0IjoxNzk1MjgyMTM3fQ.-SMsYbC-CxzDt6uR9cx0gWBUcmKRgrXsgXCqzKD8f40";
 
 async function requestMovieBox(
   method: string,

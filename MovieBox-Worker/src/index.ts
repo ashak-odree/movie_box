@@ -302,22 +302,6 @@ export default {
       }
     }
 
-    if (env.BACKEND_URL) {
-      const target = `${env.BACKEND_URL.replace(/\/$/, "")}${path}${url.search}`;
-      const fwdHeaders = new Headers(req.headers);
-      fwdHeaders.delete("host");
-      const resp = await fetch(target, {
-        method: req.method,
-        headers: fwdHeaders,
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-        redirect: "manual",
-      });
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: resp.headers,
-      });
-    }
-
     if (path === "/api/health") {
       return json({ ok: true });
     }
@@ -351,6 +335,29 @@ export default {
           "Set-Cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
         }
       );
+    }
+
+    if (env.BACKEND_URL) {
+      try {
+        const target = `${env.BACKEND_URL.replace(/\/$/, "")}${path}${url.search}`;
+        const fwdHeaders = new Headers(req.headers);
+        fwdHeaders.delete("host");
+        fwdHeaders.set("Authorization", `Bearer ${env.PASSCODE}`);
+        const resp = await fetch(target, {
+          method: req.method,
+          headers: fwdHeaders,
+          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+          redirect: "manual",
+        });
+        if (resp.status !== 530 && resp.status !== 502 && resp.status !== 504 && resp.status !== 521) {
+          return new Response(resp.body, {
+            status: resp.status,
+            headers: resp.headers,
+          });
+        }
+      } catch {
+        // Fall back to Worker standalone handlers if tunnel is offline
+      }
     }
 
     if (!(await isAuthenticated(req, env))) {
