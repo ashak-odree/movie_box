@@ -767,7 +767,7 @@ pub async fn transcode(Query(q): Query<EdgeStreamQuery>) -> Result<Response, Api
         "-crf",
         "26",
         "-vf",
-        "format=yuv420p",
+        "scale='min(1280,iw)':-2,format=yuv420p",
         "-c:a",
         "copy",
         "-movflags",

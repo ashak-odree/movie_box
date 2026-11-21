@@ -37,6 +37,11 @@
     $("tab-mobile-details")?.classList.toggle("active", view === "details");
   }
 
+  const SUPPORTS_HEVC =
+    typeof MediaSource !== "undefined" &&
+    (MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L93.B0"') ||
+      MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"'));
+
   function toB64Url(str) {
     const bytes = new TextEncoder().encode(str);
     let bin = "";
@@ -53,8 +58,25 @@
     const lower = url.toLowerCase();
     const isDash = lower.includes(".mpd");
     const isHls = lower.includes(".m3u8");
+    const isHevc = /hevc|h265|265/i.test(release.codec || release.filename || url);
     const uB64 = toB64Url(url);
     const hB64 = headers.length ? toB64Url(JSON.stringify(headers)) : "";
+    const transcodeUrl = `/api/transcode?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
+    const downloadUrl = `/api/edge-download?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}&n=${encodeURIComponent(filename)}`;
+
+    // If the stream is HEVC/H.265 and this browser lacks native HEVC decoding,
+    // stream directly through live FFmpeg H.264 transcoding from the first millisecond!
+    if (isHevc && !SUPPORTS_HEVC && !isDash) {
+      return {
+        stream_url: transcodeUrl,
+        download_url: downloadUrl,
+        transcode_url: transcodeUrl,
+        is_hls: false,
+        is_dash: false,
+        is_transcoded: true,
+        filename,
+      };
+    }
 
     let streamUrl;
     if (isDash || isHls) {
@@ -63,14 +85,13 @@
     } else {
       streamUrl = `/api/edge-stream?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
     }
-    const downloadUrl = `/api/edge-download?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}&n=${encodeURIComponent(filename)}`;
-    const transcodeUrl = `/api/transcode?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
     return {
       stream_url: streamUrl,
       download_url: downloadUrl,
       transcode_url: transcodeUrl,
       is_hls: isHls,
       is_dash: isDash,
+      is_transcoded: false,
       filename,
     };
   }
@@ -380,6 +401,14 @@
             (!r.episode || r.episode === state.selectedEpisode)
         );
         if (filtered.length > 0) releases = filtered;
+      }
+
+      // If browser doesn't support HEVC and direct MP4 releases exist, hide unplayable HEVC .mpd duplicates
+      if (!SUPPORTS_HEVC) {
+        const nonMpd = releases.filter(
+          (r) => !(r.mirrors?.[0]?.resolver_url || "").toLowerCase().includes(".mpd")
+        );
+        if (nonMpd.length > 0) releases = nonMpd;
       }
 
       // Sort H.264 (universal browser codec) above HEVC/H.265, and direct MP4 above MPD
