@@ -61,17 +61,17 @@
     const isHevc = /hevc|h265|265/i.test(release.codec || release.filename || url);
     const uB64 = toB64Url(url);
     const hB64 = headers.length ? toB64Url(JSON.stringify(headers)) : "";
-    const transcodeUrl = `/api/transcode?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
+    const transcodeUrl = `/api/transcode-hls/${encodeURIComponent(uB64)}/index.m3u8`;
     const downloadUrl = `/api/edge-download?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}&n=${encodeURIComponent(filename)}`;
 
     // If the stream is HEVC/H.265 and this browser lacks native HEVC decoding,
-    // stream directly through live FFmpeg H.264 transcoding from the first millisecond!
+    // stream directly through live FFmpeg H.264 HLS transcoding via hls.js!
     if (isHevc && !SUPPORTS_HEVC && !isDash) {
       return {
         stream_url: transcodeUrl,
         download_url: downloadUrl,
         transcode_url: transcodeUrl,
-        is_hls: false,
+        is_hls: true,
         is_dash: false,
         is_transcoded: true,
         filename,
@@ -571,7 +571,7 @@
         return;
       }
 
-      // 2. Otherwise, auto-switch to live server FFmpeg HEVC -> H.264 transcoding!
+      // 2. Otherwise, auto-switch to live server FFmpeg HEVC -> H.264 HLS transcoding via hls.js!
       if (resolved.transcode_url && !release._usingTranscode) {
         release._usingTranscode = true;
         if (state.hlsInstance) {
@@ -582,8 +582,15 @@
           state.dashInstance.reset();
           state.dashInstance = null;
         }
-        setStatus("⚡ Browser lacks HEVC video decoder — live transcoding HEVC → H.264...");
-        video.src = resolved.transcode_url;
+        setStatus("⚡ Live transcoding HEVC → H.264 (HLS) for in-browser playback...");
+        if (window.Hls && window.Hls.isSupported()) {
+          const hls = new window.Hls();
+          hls.loadSource(resolved.transcode_url);
+          hls.attachMedia(video);
+          state.hlsInstance = hls;
+        } else {
+          video.src = resolved.transcode_url;
+        }
         video.play().catch(() => {});
         return;
       }

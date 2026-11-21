@@ -727,86 +727,168 @@ pub async fn edge_download(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-pub async fn transcode(Query(q): Query<EdgeStreamQuery>) -> Result<Response, ApiError> {
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+static HLS_SESSIONS: LazyLock<Mutex<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub async fn transcode_hls(
+    State(state): State<AppState>,
+    Path((u_b64, file)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    use futures::StreamExt;
     use std::process::Stdio;
-    use tokio::io::AsyncReadExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
 
-    let url = String::from_utf8(decode_b64url(&q.u)?)
-        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
-    let headers: Vec<(String, String)> = match q.h.as_deref().filter(|s| !s.is_empty()) {
-        Some(h_b64) => serde_json::from_slice(&decode_b64url(h_b64)?).unwrap_or_default(),
-        None => Vec::new(),
-    };
-
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "error"]);
-    cmd.args(["-user_agent", moviebox_tui::net::APP_HTTP_USER_AGENT]);
-
-    if !headers.is_empty() {
-        let mut hdr_lines = String::new();
-        for (k, v) in &headers {
-            if !k.eq_ignore_ascii_case("user-agent") {
-                hdr_lines.push_str(&format!("{k}: {v}\r\n"));
-            }
-        }
-        if !hdr_lines.is_empty() {
-            cmd.args(["-headers", &hdr_lines]);
-        }
+    if file.contains("..") || file.contains('/') || file.contains('\\') {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid file path"));
     }
 
-    cmd.args([
-        "-i",
-        &url,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-tune",
-        "zerolatency",
-        "-crf",
-        "26",
-        "-vf",
-        "scale='min(1280,iw)':-2,format=yuv420p",
-        "-c:a",
-        "copy",
-        "-movflags",
-        "frag_keyframe+empty_moov+default_base_moof",
-        "-f",
-        "mp4",
-        "pipe:1",
-    ])
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null())
-    .kill_on_drop(true);
+    let url = String::from_utf8(decode_b64url(&u_b64)?)
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let session_id = &moviebox_tui::cache::md5_hex(&url)[..16];
+    let dir = std::env::temp_dir().join("mbw-hls").join(session_id);
+    let now = unix_now();
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, format!("ffmpeg failed: {e}")))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "No ffmpeg stdout"))?;
-
-    let stream = futures::stream::unfold((child, stdout), |(child, mut stdout)| async move {
-        let mut buf = vec![0u8; 32 * 1024];
-        match stdout.read(&mut buf).await {
-            Ok(0) => None,
-            Ok(n) => {
-                buf.truncate(n);
-                Some((Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::from(buf)), (child, stdout)))
-            }
-            Err(e) => Some((Err(e), (child, stdout))),
+    let needs_spawn = {
+        let mut map = HLS_SESSIONS.lock().unwrap();
+        if let Some(last_access) = map.get(session_id) {
+            last_access.store(now, Ordering::Relaxed);
+            false
+        } else {
+            let tracker = Arc::new(AtomicU64::new(now));
+            map.insert(session_id.to_string(), Arc::clone(&tracker));
+            true
         }
-    });
+    };
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "video/mp4")
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from_stream(stream))
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    if needs_spawn {
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let client = state.http_client.clone();
+        let dir_clone = dir.clone();
+        let sid_owned = session_id.to_string();
+        let url_clone = url.clone();
+
+        tokio::spawn(async move {
+            let seg_pattern = dir_clone.join("seg_%03d.ts");
+            let m3u8_path = dir_clone.join("index.m3u8");
+
+            let mut child = match Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    "pipe:0",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-tune",
+                    "zerolatency",
+                    "-crf",
+                    "26",
+                    "-vf",
+                    "scale='min(1280,iw)':-2,format=yuv420p",
+                    "-g",
+                    "48",
+                    "-sc_threshold",
+                    "0",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "128k",
+                    "-f",
+                    "hls",
+                    "-hls_time",
+                    "2",
+                    "-hls_list_size",
+                    "0",
+                    "-hls_flags",
+                    "independent_segments+temp_file",
+                    "-hls_segment_filename",
+                    seg_pattern.to_str().unwrap_or("seg_%03d.ts"),
+                    m3u8_path.to_str().unwrap_or("index.m3u8"),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(_) => {
+                    HLS_SESSIONS.lock().unwrap().remove(&sid_owned);
+                    return;
+                }
+            };
+
+            let mut stdin = child.stdin.take().unwrap();
+            let sid_for_pump = sid_owned.clone();
+
+            let pump = async move {
+                if let Ok(resp) = client
+                    .get(&url_clone)
+                    .header("User-Agent", moviebox_tui::net::APP_HTTP_USER_AGENT)
+                    .send()
+                    .await
+                {
+                    let mut stream = resp.bytes_stream();
+                    while let Some(Ok(chunk)) = stream.next().await {
+                        let last = HLS_SESSIONS
+                            .lock()
+                            .unwrap()
+                            .get(&sid_for_pump)
+                            .map(|a| a.load(Ordering::Relaxed))
+                            .unwrap_or(0);
+                        if unix_now().saturating_sub(last) > 45 {
+                            break;
+                        }
+                        if stdin.write_all(&chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            };
+
+            let _ = tokio::join!(pump, child.wait());
+            HLS_SESSIONS.lock().unwrap().remove(&sid_owned);
+            let _ = tokio::fs::remove_dir_all(&dir_clone).await;
+        });
+    }
+
+    let target_file = dir.join(&file);
+    for _ in 0..90 {
+        if let Ok(bytes) = tokio::fs::read(&target_file).await
+            && !bytes.is_empty()
+        {
+            let ct = if file.ends_with(".m3u8") {
+                "application/vnd.apple.mpegurl"
+            } else {
+                "video/mp2t"
+            };
+            return Ok((
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, ct),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                bytes,
+            )
+                .into_response());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    Err(api_err(StatusCode::GATEWAY_TIMEOUT, "HLS segment timeout"))
 }
 
 pub async fn updater_status(State(state): State<AppState>) -> Json<crate::state::UpdateStatus> {
