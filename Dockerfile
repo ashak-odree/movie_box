@@ -24,3 +24,4 @@ ENV AUTO_UPDATE_ENABLED=false
 
 EXPOSE 8080
 CMD ["moviebox-web"]
+

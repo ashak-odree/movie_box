@@ -5,6 +5,12 @@ import {
   searchCinemeta,
   suggestCinemeta,
 } from "./cinemeta";
+import {
+  getDramachiDetails,
+  getDramachiStreams,
+  getDramachiTrending,
+  searchDramachi,
+} from "./dramachi";
 
 export interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
@@ -149,6 +155,8 @@ export default {
         return json([
           { id: "movies", label: "Movies", is_bdix: false },
           { id: "series", label: "TV Series", is_bdix: false },
+          { id: "dramachi", label: "Dramachi (Direct)", is_bdix: false },
+          { id: "anime", label: "Anime", is_bdix: false },
           { id: "all", label: "All", is_bdix: false },
         ]);
       }
@@ -156,6 +164,25 @@ export default {
       if (path === "/api/homepage") {
         const provider = url.searchParams.get("provider") || "movies";
         const page = Number(url.searchParams.get("page") || "1") || 1;
+        if (provider === "dramachi") {
+          return json(await getDramachiTrending());
+        }
+        if (provider === "anime") {
+          const r = await fetch("https://anime-kitsu.strem.fun/catalog/anime/kitsu-anime-trending.json");
+          const d: any = r.ok ? await r.json() : {};
+          const items = (d?.metas || [])
+            .filter((m: any) => m?.imdb_id)
+            .slice(0, 40)
+            .map((m: any) => ({
+              id: { provider: "anime", value: `series:${m.imdb_id}` },
+              title: m.name,
+              media_type: "series",
+              year: m.releaseInfo ? String(m.releaseInfo).slice(0, 4) : null,
+              poster_url: m.poster || null,
+              season_count: null,
+            }));
+          return json({ items, page });
+        }
         return json(await getCinemetaHomepage(provider, page));
       }
 
@@ -164,6 +191,27 @@ export default {
         const provider = url.searchParams.get("provider") || "all";
         const page = Number(url.searchParams.get("page") || "1") || 1;
         if (!q) return json({ items: [] });
+        if (provider === "dramachi") {
+          return json(await searchDramachi(q, page));
+        }
+        if (provider === "anime") {
+          const r = await fetch(
+            `https://anime-kitsu.strem.fun/catalog/anime/kitsu-anime-list/search=${encodeURIComponent(q)}.json`
+          );
+          const d: any = r.ok ? await r.json() : {};
+          const items = (d?.metas || [])
+            .filter((m: any) => m?.imdb_id)
+            .slice(0, 30)
+            .map((m: any) => ({
+              id: { provider: "anime", value: `series:${m.imdb_id}` },
+              title: m.name,
+              media_type: "series",
+              year: m.releaseInfo ? String(m.releaseInfo).slice(0, 4) : null,
+              poster_url: m.poster || null,
+              season_count: null,
+            }));
+          return json({ provider: "anime", page, items });
+        }
         return json(await searchCinemeta(q, provider, page));
       }
 
@@ -174,15 +222,46 @@ export default {
       }
 
       if (path === "/api/details") {
+        const provider = url.searchParams.get("provider") || "";
         const id = url.searchParams.get("id") || "";
+        if (provider === "dramachi") {
+          return json(await getDramachiDetails(id));
+        }
         return json(await getCinemetaDetails(id));
       }
 
       if (path === "/api/streams") {
+        const provider = url.searchParams.get("provider") || "";
         const id = url.searchParams.get("id") || "";
         const season = Number(url.searchParams.get("season") || "0") || 0;
         const episode = Number(url.searchParams.get("episode") || "0") || 0;
+        if (provider === "dramachi") {
+          return json(await getDramachiStreams(id, season, episode));
+        }
         return json(await getEmbedStreams(id, season, episode));
+      }
+
+      if (path === "/api/edge-stream" || path === "/api/edge-download") {
+        const isDownload = path === "/api/edge-download";
+        const uB64 = url.searchParams.get("u") || "";
+        const fname = url.searchParams.get("n") || "movie.mp4";
+        const targetUrl = new TextDecoder().decode(b64urlDecode(uB64));
+        if (!targetUrl.startsWith("http")) return json({ error: "Invalid URL" }, 400);
+        const fwd = new Headers({ "User-Agent": "MovieBox-Tui/0.1.30" });
+        const range = req.headers.get("Range");
+        if (range) fwd.set("Range", range);
+        const upstream = await fetch(targetUrl, { headers: fwd });
+        const outHeaders = new Headers();
+        for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+          const v = upstream.headers.get(h);
+          if (v) outHeaders.set(h, v);
+        }
+        outHeaders.set("Access-Control-Allow-Origin", "*");
+        if (isDownload) {
+          const safe = fname.replace(/[^a-zA-Z0-9._ -]/g, "_");
+          outHeaders.set("Content-Disposition", `attachment; filename="${safe}"`);
+        }
+        return new Response(upstream.body, { status: upstream.status, headers: outHeaders });
       }
 
       if (path === "/api/captions") {

@@ -195,7 +195,14 @@
         const q = $("search-input").value.trim();
         if (q) {
           performSearch(q);
-        } else if (p.id === "moviebox" || p.id === "movies" || p.id === "series" || p.id === "all") {
+        } else if (
+          p.id === "moviebox" ||
+          p.id === "movies" ||
+          p.id === "series" ||
+          p.id === "dramachi" ||
+          p.id === "anime" ||
+          p.id === "all"
+        ) {
           loadHomepage();
         } else {
           setStatus(`Switched to ${p.label}. Type a query to search.`);
