@@ -7,7 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js" defer></script>
 </head>
@@ -63,6 +65,7 @@
           <option value="gruvbox">Gruvbox</option>
           <option value="rosepine">RosePine</option>
         </select>
+        <button id="btn-custom-url" class="tui-btn tui-btn-primary" title="Play any .m3u8 / .mp4 URL in Open-Source Plyr">[ ▶ URL ]</button>
         <button id="btn-help" class="tui-btn" title="Help (?)">[?]</button>
         <button id="btn-logout" class="tui-btn tui-btn-danger" title="Lock session">[Lock]</button>
       </div>
@@ -148,6 +151,24 @@
         <video id="video-player" controls autoplay playsinline></video>
       </div>
       <div id="player-subtitles" class="player-subtitles"></div>
+    </div>
+  </div>
+
+  <!-- Custom URL Open-Source Player Modal -->
+  <div id="url-modal" class="modal hidden">
+    <div class="tui-box modal-box help-box">
+      <div class="modal-header">
+        <span class="pane-title">─ Open-Source Player (Plyr + HLS.js) ─</span>
+        <button id="btn-close-url" class="tui-btn">[Esc Close]</button>
+      </div>
+      <form id="custom-url-form" class="help-content">
+        <p class="muted">Paste any direct <code>.m3u8</code> (Live TV / HLS), <code>.mp4</code>, or <code>.webm</code> stream URL:</p>
+        <div class="gate-form">
+          <span class="prompt">url&gt;</span>
+          <input id="custom-url-input" type="url" placeholder="https://.../playlist.m3u8 or movie.mp4" required spellcheck="false" />
+        </div>
+        <button type="submit" class="tui-btn tui-btn-primary">[ ▶ Play in Open-Source Player ]</button>
+      </form>
     </div>
   </div>
 

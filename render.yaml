@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: moviebox-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: PASSCODE
+        value: "mamamiakoi"
+      - key: AUTO_UPDATE_ENABLED
+        value: "false"

@@ -21,6 +21,7 @@
     selectedEpisode: 0,
     hlsInstance: null,
     dashInstance: null,
+    plyrInstance: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -607,6 +608,8 @@
       video.pause();
       video.removeAttribute("src");
       video.classList.add("hidden");
+      const plyrEl = wrap.querySelector(".plyr");
+      if (plyrEl) plyrEl.classList.add("hidden");
 
       const iframe = document.createElement("iframe");
       iframe.id = "embed-player-frame";
@@ -639,6 +642,27 @@
     }
 
     video.classList.remove("hidden");
+    if (window.Plyr && !state.plyrInstance) {
+      state.plyrInstance = new window.Plyr(video, {
+        controls: [
+          "play-large",
+          "play",
+          "progress",
+          "current-time",
+          "duration",
+          "mute",
+          "volume",
+          "captions",
+          "settings",
+          "pip",
+          "fullscreen",
+        ],
+        settings: ["captions", "speed"],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+      });
+    }
+    const plyrEl = wrap.querySelector(".plyr");
+    if (plyrEl) plyrEl.classList.remove("hidden");
     $("player-subtitles").innerHTML = `<span class="muted">Loading subtitles...</span>`;
 
     video.innerHTML = "";
@@ -905,6 +929,36 @@
   $("btn-search").onclick = () => performSearch($("search-input").value);
   $("btn-close-player").onclick = closePlayer;
   if ($("btn-fullscreen-player")) $("btn-fullscreen-player").onclick = toggleFullscreen;
+  if ($("btn-custom-url")) {
+    $("btn-custom-url").onclick = () => {
+      $("url-modal").classList.remove("hidden");
+      $("custom-url-input").focus();
+    };
+  }
+  if ($("btn-close-url")) {
+    $("btn-close-url").onclick = () => $("url-modal").classList.add("hidden");
+  }
+  if ($("custom-url-form")) {
+    $("custom-url-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const rawUrl = $("custom-url-input").value.trim();
+      if (!rawUrl) return;
+      $("url-modal").classList.add("hidden");
+      const lower = rawUrl.toLowerCase();
+      openPlayer(
+        "Direct Stream (Plyr)",
+        {
+          stream_url: rawUrl,
+          download_url: rawUrl,
+          is_hls: lower.includes(".m3u8"),
+          is_dash: lower.includes(".mpd"),
+          is_embed: false,
+          filename: "stream.mp4",
+        },
+        { provider: "direct", filename: "stream.mp4", mirrors: [{ resolver_url: rawUrl, headers: [] }] }
+      );
+    });
+  }
   $("btn-help").onclick = () => $("help-modal").classList.remove("hidden");
   $("btn-close-help").onclick = () => $("help-modal").classList.add("hidden");
 
