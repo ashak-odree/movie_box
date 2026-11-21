@@ -138,7 +138,23 @@ export async function getCinemetaDetails(rawId: string) {
   };
 }
 
-export function getEmbedStreams(rawId: string, season = 0, episode = 0) {
+const tmdbCache = new Map<string, string | null>();
+
+async function resolveTmdbId(type: "movie" | "series", imdbId: string): Promise<string | null> {
+  const key = `${type}:${imdbId}`;
+  if (tmdbCache.has(key)) return tmdbCache.get(key) ?? null;
+  try {
+    const data = await fetchJson(`${CINEMETA}/meta/${type}/${encodeURIComponent(imdbId)}.json`);
+    const tid = data?.meta?.moviedb_id ? String(data.meta.moviedb_id) : null;
+    if (tmdbCache.size > 500) tmdbCache.clear();
+    tmdbCache.set(key, tid);
+    return tid;
+  } catch {
+    return null;
+  }
+}
+
+export async function getEmbedStreams(rawId: string, season = 0, episode = 0) {
   let type: "movie" | "series" = "movie";
   let imdbId = rawId;
   if (rawId.includes(":")) {
@@ -151,28 +167,38 @@ export function getEmbedStreams(rawId: string, season = 0, episode = 0) {
   const s = Math.max(1, season || 1);
   const e = Math.max(1, episode || 1);
   const tag = isTv ? `S${s}E${e}` : "Full Movie";
+  const tmdbId = await resolveTmdbId(isTv ? "series" : "movie", imdbId);
+  const primaryId = tmdbId || imdbId;
 
   const servers = [
     {
       name: `Server 1 · VidSrc.su (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://vidsrc.su/embed/tv/${imdbId}/${s}/${e}`
-        : `https://vidsrc.su/embed/movie/${imdbId}`,
+        ? `https://vidsrc.su/embed/tv/${primaryId}/${s}/${e}`
+        : `https://vidsrc.su/embed/movie/${primaryId}`,
     },
     {
       name: `Server 2 · MultiEmbed (${tag})`,
       quality: "1080p",
-      url: isTv
-        ? `https://multiembed.mov/?video_id=${imdbId}&s=${s}&e=${e}`
-        : `https://multiembed.mov/?video_id=${imdbId}`,
+      url: tmdbId
+        ? isTv
+          ? `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1&s=${s}&e=${e}`
+          : `https://multiembed.mov/?video_id=${tmdbId}&tmdb=1`
+        : isTv
+          ? `https://multiembed.mov/?video_id=${imdbId}&s=${s}&e=${e}`
+          : `https://multiembed.mov/?video_id=${imdbId}`,
     },
     {
       name: `Server 3 · AutoEmbed (${tag})`,
       quality: "1080p",
-      url: isTv
-        ? `https://autoembed.co/tv/imdb/${imdbId}-${s}-${e}`
-        : `https://autoembed.co/movie/imdb/${imdbId}`,
+      url: tmdbId
+        ? isTv
+          ? `https://autoembed.co/tv/tmdb/${tmdbId}-${s}-${e}`
+          : `https://autoembed.co/movie/tmdb/${tmdbId}`
+        : isTv
+          ? `https://autoembed.co/tv/imdb/${imdbId}-${s}-${e}`
+          : `https://autoembed.co/movie/imdb/${imdbId}`,
     },
     {
       name: `Server 4 · 2Embed (${tag})`,
@@ -182,11 +208,11 @@ export function getEmbedStreams(rawId: string, season = 0, episode = 0) {
         : `https://www.2embed.cc/embed/${imdbId}`,
     },
     {
-      name: `Server 5 · VidSrc.in (${tag})`,
+      name: `Server 5 · VidLink (${tag})`,
       quality: "1080p",
       url: isTv
-        ? `https://vidsrc.in/embed/tv?imdb=${imdbId}&season=${s}&episode=${e}`
-        : `https://vidsrc.in/embed/movie?imdb=${imdbId}`,
+        ? `https://vidlink.pro/tv/${primaryId}/${s}/${e}`
+        : `https://vidlink.pro/movie/${primaryId}`,
     },
   ];
 

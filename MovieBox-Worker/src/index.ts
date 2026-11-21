@@ -182,7 +182,7 @@ export default {
         const id = url.searchParams.get("id") || "";
         const season = Number(url.searchParams.get("season") || "0") || 0;
         const episode = Number(url.searchParams.get("episode") || "0") || 0;
-        return json(getEmbedStreams(id, season, episode));
+        return json(await getEmbedStreams(id, season, episode));
       }
 
       if (path === "/api/captions") {
