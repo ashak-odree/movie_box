@@ -153,19 +153,41 @@ export default {
     try {
       if (path === "/api/providers") {
         return json([
-          { id: "movies", label: "Movies", is_bdix: false },
-          { id: "series", label: "TV Series", is_bdix: false },
-          { id: "dramachi", label: "Dramachi (Direct)", is_bdix: false },
-          { id: "anime", label: "Anime", is_bdix: false },
           { id: "all", label: "All", is_bdix: false },
+          { id: "moviebox", label: "MovieBox", is_bdix: false },
+          { id: "fourkhdhub", label: "4KHDHub", is_bdix: false },
+          { id: "dramachi", label: "Dramachi", is_bdix: false },
+          { id: "bdix_circleftp", label: "CircleFTP (BDIX)", is_bdix: true },
+          { id: "bdix_dhakaflix", label: "DhakaFlix (BDIX)", is_bdix: true },
+          { id: "anime", label: "Anime", is_bdix: false },
         ]);
       }
 
       if (path === "/api/homepage") {
-        const provider = url.searchParams.get("provider") || "movies";
+        const provider = url.searchParams.get("provider") || "all";
         const page = Number(url.searchParams.get("page") || "1") || 1;
         if (provider === "dramachi") {
           return json(await getDramachiTrending());
+        }
+        if (provider === "bdix_circleftp") {
+          return json({
+            page: 1,
+            items: [
+              { id: { provider: "bdix_circleftp", value: "http://new.circleftp.net:5000/" }, title: "CircleFTP Main Server (BDIX 100Mbps)", media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_circleftp", value: "http://circleftp.net/" }, title: "CircleFTP Web Portal (BDIX)", media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+            ],
+          });
+        }
+        if (provider === "bdix_dhakaflix") {
+          return json({
+            page: 1,
+            items: [
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.7/DHAKA-FLIX-7/" }, title: "DHAKA-FLIX-7 · English & Hollywood Movies", media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.14/DHAKA-FLIX-14/" }, title: "DHAKA-FLIX-14 · Hindi, Bangla & Dual Audio", media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.12/DHAKA-FLIX-12/" }, title: "DHAKA-FLIX-12 · TV & Web Series", media_type: "series", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.9/DHAKA-FLIX-9/" }, title: "DHAKA-FLIX-9 · Anime & Cartoons", media_type: "series", year: "BDIX", poster_url: null, season_count: null },
+            ],
+          });
         }
         if (provider === "anime") {
           const r = await fetch("https://anime-kitsu.strem.fun/catalog/anime/kitsu-anime-trending.json");
@@ -183,7 +205,20 @@ export default {
             }));
           return json({ items, page });
         }
-        return json(await getCinemetaHomepage(provider, page));
+        if (provider === "all") {
+          const [movies, series] = await Promise.all([
+            getCinemetaHomepage("movies", page).catch(() => ({ items: [] })),
+            getCinemetaHomepage("series", page).catch(() => ({ items: [] })),
+          ]);
+          const merged: any[] = [];
+          const max = Math.max(movies.items.length, series.items.length);
+          for (let i = 0; i < max; i++) {
+            if (movies.items[i]) merged.push(movies.items[i]);
+            if (series.items[i]) merged.push(series.items[i]);
+          }
+          return json({ items: merged.slice(0, 40), page });
+        }
+        return json(await getCinemetaHomepage("movies", page));
       }
 
       if (path === "/api/search") {
@@ -193,6 +228,28 @@ export default {
         if (!q) return json({ items: [] });
         if (provider === "dramachi") {
           return json(await searchDramachi(q, page));
+        }
+        if (provider === "bdix_circleftp") {
+          return json({
+            provider,
+            page: 1,
+            items: [
+              { id: { provider: "bdix_circleftp", value: `http://new.circleftp.net:5000/?s=${encodeURIComponent(q)}` }, title: `Search "${q}" on CircleFTP (BDIX Direct)`, media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_circleftp", value: "http://new.circleftp.net:5000/" }, title: "Open CircleFTP Portal (BDIX 100Mbps)", media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+            ],
+          });
+        }
+        if (provider === "bdix_dhakaflix") {
+          return json({
+            provider,
+            page: 1,
+            items: [
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.7/DHAKA-FLIX-7/" }, title: `DHAKA-FLIX-7 · Browse/Find "${q}" (Movies)`, media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.14/DHAKA-FLIX-14/" }, title: `DHAKA-FLIX-14 · Browse/Find "${q}" (Hindi/Dual)`, media_type: "movie", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.12/DHAKA-FLIX-12/" }, title: `DHAKA-FLIX-12 · Browse/Find "${q}" (TV Series)`, media_type: "series", year: "BDIX", poster_url: null, season_count: null },
+              { id: { provider: "bdix_dhakaflix", value: "http://172.16.50.9/DHAKA-FLIX-9/" }, title: `DHAKA-FLIX-9 · Browse/Find "${q}" (Anime)`, media_type: "series", year: "BDIX", poster_url: null, season_count: null },
+            ],
+          });
         }
         if (provider === "anime") {
           const r = await fetch(
@@ -212,7 +269,20 @@ export default {
             }));
           return json({ provider: "anime", page, items });
         }
-        return json(await searchCinemeta(q, provider, page));
+        if (provider === "all") {
+          const [cine, drama] = await Promise.all([
+            searchCinemeta(q, "all", page).catch(() => ({ items: [] })),
+            searchDramachi(q, page).catch(() => ({ items: [] })),
+          ]);
+          const merged: any[] = [];
+          const max = Math.max(cine.items.length, drama.items.length);
+          for (let i = 0; i < max; i++) {
+            if (cine.items[i]) merged.push(cine.items[i]);
+            if (drama.items[i]) merged.push(drama.items[i]);
+          }
+          return json({ provider: "all", page, items: merged.slice(0, 45) });
+        }
+        return json(await searchCinemeta(q, "all", page));
       }
 
       if (path === "/api/suggest") {
@@ -227,6 +297,21 @@ export default {
         if (provider === "dramachi") {
           return json(await getDramachiDetails(id));
         }
+        if (provider === "bdix_circleftp" || provider === "bdix_dhakaflix") {
+          const isCircle = provider === "bdix_circleftp";
+          return json({
+            id: { provider, value: id },
+            title: isCircle ? "CircleFTP (BDIX Direct)" : "DhakaFlix (BDIX Direct)",
+            media_type: "movie",
+            year: "BDIX",
+            description:
+              "Direct Bangladesh BDIX FTP/Media server. Because your browser is on a BD ISP network, click Open Tab below to browse, stream & download at full 100Mbps BDIX speed.",
+            poster_url: null,
+            genres: ["BDIX", "Bangladesh", "100Mbps"],
+            seasons: [],
+            dubs: [],
+          });
+        }
         return json(await getCinemetaDetails(id));
       }
 
@@ -237,6 +322,22 @@ export default {
         const episode = Number(url.searchParams.get("episode") || "0") || 0;
         if (provider === "dramachi") {
           return json(await getDramachiStreams(id, season, episode));
+        }
+        if (provider === "bdix_circleftp" || provider === "bdix_dhakaflix") {
+          return json([
+            {
+              provider: "embed",
+              filename: `Open BDIX Server (${id})`,
+              quality: "100Mbps",
+              codec: "h264",
+              language: "BDIX Direct",
+              size_bytes: null,
+              season: 0,
+              episode: 0,
+              resource_id: id,
+              mirrors: [{ label: "BDIX Direct", resolver_url: id, headers: [], direct_file: false }],
+            },
+          ]);
         }
         return json(await getEmbedStreams(id, season, episode));
       }
