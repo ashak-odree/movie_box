@@ -177,14 +177,7 @@ pub async fn streams(
             );
             let mut list = Vec::new();
             if let Ok(payload) = res_res {
-                let mut res_items = moviebox_resource_json_to_releases(&payload);
-                if season > 0 || episode > 0 {
-                    res_items.retain(|r| {
-                        r.season.unwrap_or(season) == season
-                            && r.episode.unwrap_or(episode) == episode
-                    });
-                }
-                list.extend(res_items);
+                list.extend(moviebox_resource_json_to_releases(&payload));
             }
             if let Ok(payload) = play_res {
                 list.extend(moviebox_play_info_json_to_releases(
@@ -300,23 +293,6 @@ pub async fn resolve(
     let lower_url = target_url.to_ascii_lowercase();
     let is_hls = lower_url.contains(".m3u8");
     let is_dash = lower_url.contains(".mpd");
-    let needs_cookie_proxy = target_headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("cookie"));
-
-    // If no Cookie header is required and it's a direct video file (not DASH/HLS),
-    // return the direct CDN URL so the browser streams/downloads at 100% CDN speed
-    // without any extra redirect or tunnel hop!
-    if !needs_cookie_proxy && !is_dash && !is_hls {
-        return Ok(Json(ResolveResponse {
-            stream_url: target_url.clone(),
-            download_url: target_url,
-            is_hls,
-            is_dash,
-            filename,
-        }));
-    }
-
     let token = state
         .register_stream_target(StreamTarget {
             url: target_url,
@@ -510,10 +486,6 @@ pub async fn stream(
         .await
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Stream token expired or invalid"))?;
 
-    if q.vtt != Some(1) && target.headers.is_empty() {
-        return Ok(axum::response::Redirect::temporary(&target.url).into_response());
-    }
-
     if q.vtt == Some(1) {
         let resp = build_upstream_request(&state.http_client, &target, None)
             .send()
@@ -624,10 +596,6 @@ pub async fn download(
         .await
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "Download token expired or invalid"))?;
 
-    if target.headers.is_empty() {
-        return Ok(axum::response::Redirect::temporary(&target.url).into_response());
-    }
-
     let upstream = build_upstream_request(&state.http_client, &target, None)
         .send()
         .await
@@ -659,6 +627,103 @@ pub async fn download(
     let body = Body::from_stream(upstream.bytes_stream());
     builder
         .body(body)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[derive(Deserialize)]
+pub struct EdgeStreamQuery {
+    pub u: String,
+    pub h: Option<String>,
+    pub n: Option<String>,
+}
+
+fn decode_b64url(input: &str) -> Result<Vec<u8>, ApiError> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(input.trim_end_matches('='))
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, format!("Invalid base64: {e}")))
+}
+
+pub async fn edge_stream(
+    State(state): State<AppState>,
+    Query(q): Query<EdgeStreamQuery>,
+    req_headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let url = String::from_utf8(decode_b64url(&q.u)?)
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let headers: Vec<(String, String)> = match q.h.as_deref().filter(|s| !s.is_empty()) {
+        Some(h_b64) => serde_json::from_slice(&decode_b64url(h_b64)?)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let target = StreamTarget {
+        url,
+        headers,
+        filename: q.n,
+        created_at: unix_now(),
+    };
+    let range = req_headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let upstream = build_upstream_request(&state.http_client, &target, range)
+        .send()
+        .await
+        .map_err(|e| api_err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::OK);
+    let mut builder = Response::builder().status(status);
+    for name in [
+        header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::ACCEPT_RANGES,
+    ] {
+        if let Some(val) = upstream.headers().get(&name) {
+            builder = builder.header(name, val);
+        }
+    }
+    builder
+        .body(Body::from_stream(upstream.bytes_stream()))
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn edge_download(
+    State(state): State<AppState>,
+    Query(q): Query<EdgeStreamQuery>,
+) -> Result<Response, ApiError> {
+    let url = String::from_utf8(decode_b64url(&q.u)?)
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let headers: Vec<(String, String)> = match q.h.as_deref().filter(|s| !s.is_empty()) {
+        Some(h_b64) => serde_json::from_slice(&decode_b64url(h_b64)?)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let raw_name = q.n.unwrap_or_else(|| "movie.mp4".to_string());
+    let safe_name: String = raw_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') { c } else { '_' })
+        .collect();
+    let target = StreamTarget {
+        url,
+        headers,
+        filename: Some(safe_name.clone()),
+        created_at: unix_now(),
+    };
+    let upstream = build_upstream_request(&state.http_client, &target, None)
+        .send()
+        .await
+        .map_err(|e| api_err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::OK);
+    let mut builder = Response::builder().status(status).header(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{safe_name}\""),
+    );
+    for name in [header::CONTENT_TYPE, header::CONTENT_LENGTH] {
+        if let Some(val) = upstream.headers().get(&name) {
+            builder = builder.header(name, val);
+        }
+    }
+    builder
+        .body(Body::from_stream(upstream.bytes_stream()))
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 

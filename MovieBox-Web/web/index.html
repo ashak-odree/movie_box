@@ -2,8 +2,7 @@
 <html lang="en" data-theme="mocha">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="referrer" content="no-referrer" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MovieBox-TUI // Web</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -71,11 +70,11 @@
 
     <!-- Search Bar -->
     <section class="tui-searchbar tui-box">
-      <span class="search-prefix">[/]</span>
+      <span class="search-prefix">[/] Search &gt;</span>
       <input
         id="search-input"
         type="text"
-        placeholder="Search movies, series, anime..."
+        placeholder="Search movies, series, anime... (press / to focus, Enter to search)"
         autocomplete="off"
         spellcheck="false"
       />
@@ -84,14 +83,8 @@
       <div id="suggest-box" class="suggest-box hidden"></div>
     </section>
 
-    <!-- Mobile Pane Switcher (visible only on mobile/tablet) -->
-    <div class="mobile-view-tabs tui-box">
-      <button id="tab-mobile-catalog" class="mobile-tab active">[ 1: Catalog List ]</button>
-      <button id="tab-mobile-details" class="mobile-tab">[ 2: Details &amp; Streams ]</button>
-    </div>
-
     <!-- Main 2-Pane TUI Workspace -->
-    <main id="tui-workspace" class="tui-workspace" data-mobile-view="catalog">
+    <main class="tui-workspace">
       <!-- Left Pane: Catalog / Search Results -->
       <section class="tui-pane tui-box catalog-pane">
         <div class="pane-header">
@@ -104,16 +97,13 @@
       <!-- Right Pane: Details & Streams -->
       <section class="tui-pane tui-box details-pane">
         <div class="pane-header">
-          <div class="pane-header-left">
-            <button id="btn-mobile-back" class="tui-btn mobile-only">[← Back]</button>
-            <span id="details-title" class="pane-title">─ Details ─</span>
-          </div>
+          <span id="details-title" class="pane-title">─ Details ─</span>
           <span id="details-meta" class="pane-meta"></span>
         </div>
         <div id="details-body" class="details-body">
           <div class="empty-state">
-            <p>Select a movie or series from the catalog list.</p>
-            <p class="muted">Use ↑/↓ or j/k to navigate, Enter or tap to inspect, / to search.</p>
+            <p>Select a movie or series from the left pane.</p>
+            <p class="muted">Use ↑/↓ or j/k to navigate, Enter to inspect, / to search.</p>
           </div>
         </div>
       </section>
@@ -140,12 +130,12 @@
       <div class="modal-header">
         <span id="player-title" class="pane-title">▶ Stream</span>
         <div class="modal-actions">
-          <a id="player-download-link" class="tui-btn tui-btn-green" href="#" target="_blank" rel="noreferrer" download>[ ↓ Fast Download ]</a>
+          <a id="player-download-link" class="tui-btn" href="#" download>[ ↓ Download ]</a>
           <button id="btn-close-player" class="tui-btn tui-btn-danger">[Esc Close]</button>
         </div>
       </div>
       <div class="player-video-wrap">
-        <video id="video-player" controls autoplay playsinline referrerpolicy="no-referrer"></video>
+        <video id="video-player" controls autoplay playsinline crossorigin="anonymous"></video>
       </div>
       <div id="player-subtitles" class="player-subtitles"></div>
     </div>
@@ -174,3 +164,4 @@
   <script src="/app.js"></script>
 </body>
 </html>
+

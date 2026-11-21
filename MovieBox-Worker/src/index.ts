@@ -149,6 +149,53 @@ export default {
       return env.ASSETS.fetch(req);
     }
 
+    // Handle video streaming & downloading directly at Cloudflare Edge (100Gbps)
+    // so video bytes NEVER bottleneck through the home cloudflared tunnel,
+    // and replace browser Mozilla/5.0 User-Agent with MovieBox-Tui/0.1.30 so CDN never returns 428!
+    if (path === "/api/edge-stream" || path === "/api/edge-download") {
+      try {
+        const uB64 = url.searchParams.get("u") || "";
+        const hB64 = url.searchParams.get("h") || "";
+        const fname = url.searchParams.get("n") || "movie.mp4";
+        const targetUrl = new TextDecoder().decode(b64urlDecode(uB64));
+        const headers: [string, string][] = hB64
+          ? JSON.parse(new TextDecoder().decode(b64urlDecode(hB64)))
+          : [];
+        if (!targetUrl.startsWith("http")) {
+          return json({ error: "Invalid target url" }, 400);
+        }
+        return proxyUpstream(
+          targetUrl,
+          headers,
+          req,
+          path === "/api/edge-download" ? fname : undefined
+        );
+      } catch (e: any) {
+        return json({ error: e?.message || "Edge stream error" }, 502);
+      }
+    }
+
+    if (path.startsWith("/api/edge-manifest/")) {
+      try {
+        const rest = path.slice("/api/edge-manifest/".length);
+        const slash = rest.indexOf("/");
+        if (slash <= 0) return json({ error: "Bad manifest path" }, 400);
+        const payloadB64 = decodeURIComponent(rest.slice(0, slash));
+        const relpath = rest.slice(slash + 1);
+        const data = JSON.parse(new TextDecoder().decode(b64urlDecode(payloadB64))) as {
+          u: string;
+          h: [string, string][];
+        };
+        const upstreamUrl =
+          relpath === "index.mpd" || relpath === "index.m3u8"
+            ? data.u
+            : new URL(relpath, data.u).toString();
+        return proxyUpstream(upstreamUrl, data.h || [], req);
+      } catch (e: any) {
+        return json({ error: e?.message || "Edge manifest error" }, 502);
+      }
+    }
+
     if (env.BACKEND_URL) {
       const target = `${env.BACKEND_URL.replace(/\/$/, "")}${path}${url.search}`;
       const fwdHeaders = new Headers(req.headers);

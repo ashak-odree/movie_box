@@ -63,6 +63,8 @@ async fn main() {
         .route("/captions", get(api::captions))
         .route("/poster", get(api::poster))
         .route("/stream", get(api::stream))
+        .route("/edge-stream", get(api::edge_stream))
+        .route("/edge-download", get(api::edge_download))
         .route("/manifest/{token}/{*relpath}", get(api::stream_manifest_segment))
         .route("/download", get(api::download))
         .route("/updater/status", get(api::updater_status))

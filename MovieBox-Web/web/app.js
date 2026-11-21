@@ -37,6 +37,42 @@
     $("tab-mobile-details")?.classList.toggle("active", view === "details");
   }
 
+  function toB64Url(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function buildEdgeUrls(release, filename) {
+    if (!release || release.provider === "fourkhdhub") return null;
+    const mirror = release.mirrors?.[0];
+    const url = mirror?.resolver_url;
+    if (!url) return null;
+    const headers = mirror.headers || [];
+    const lower = url.toLowerCase();
+    const isDash = lower.includes(".mpd");
+    const isHls = lower.includes(".m3u8");
+    const uB64 = toB64Url(url);
+    const hB64 = headers.length ? toB64Url(JSON.stringify(headers)) : "";
+
+    let streamUrl;
+    if (isDash || isHls) {
+      const payload = toB64Url(JSON.stringify({ u: url, h: headers }));
+      streamUrl = `/api/edge-manifest/${encodeURIComponent(payload)}/${isDash ? "index.mpd" : "index.m3u8"}`;
+    } else {
+      streamUrl = `/api/edge-stream?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}`;
+    }
+    const downloadUrl = `/api/edge-download?u=${encodeURIComponent(uB64)}&h=${encodeURIComponent(hB64)}&n=${encodeURIComponent(filename)}`;
+    return {
+      stream_url: streamUrl,
+      download_url: downloadUrl,
+      is_hls: isHls,
+      is_dash: isDash,
+      filename,
+    };
+  }
+
   function escapeHtml(str) {
     return String(str ?? "")
       .replace(/&/g, "&amp;")
@@ -121,7 +157,6 @@
         } else if (p.id === "moviebox") {
           loadHomepage();
         } else {
-          setMobileView("catalog");
           setStatus(`Switched to ${p.label}. Type a query to search.`);
         }
       };
@@ -148,7 +183,6 @@
     const q = query.trim();
     if (!q) return loadHomepage();
     $("suggest-box").classList.add("hidden");
-    $("search-input").blur();
     setMobileView("catalog");
     setStatus(`Searching "${q}" on ${state.activeProvider}...`);
     $("catalog-title").textContent = `─ Search: ${q} ─`;
@@ -177,7 +211,7 @@
       .map((item, idx) => {
         const selected = idx === state.selectedIndex;
         const poster = item.poster_url
-          ? `<img class="catalog-thumb" loading="lazy" referrerpolicy="no-referrer" src="${escapeHtml(item.poster_url)}" onerror="this.src='/api/poster?url=${encodeURIComponent(item.poster_url)}'" alt="" />`
+          ? `<img class="catalog-thumb" loading="lazy" src="/api/poster?url=${encodeURIComponent(item.poster_url)}" alt="" />`
           : `<div class="catalog-thumb"></div>`;
         const year = item.year ? `(${escapeHtml(item.year)})` : "";
         const kind = item.media_type === "series" ? "SERIES" : "MOVIE";
@@ -246,7 +280,7 @@
     if (!d) return;
 
     const poster = d.poster_url
-      ? `<img class="details-poster" referrerpolicy="no-referrer" src="${escapeHtml(d.poster_url)}" onerror="this.src='/api/poster?url=${encodeURIComponent(d.poster_url)}'" alt="" />`
+      ? `<img class="details-poster" src="/api/poster?url=${encodeURIComponent(d.poster_url)}" alt="" />`
       : "";
     const tags = [
       d.year ? `<span class="badge">${escapeHtml(d.year)}</span>` : "",
@@ -292,7 +326,7 @@
         </div>
       </div>
       ${episodesHtml}
-      <div class="section-heading">Streams &amp; Fast Downloads</div>
+      <div class="section-heading">Streams &amp; Downloads</div>
       <div id="streams-container" class="streams-list">
         <div class="muted">Resolving available streams...</div>
       </div>
@@ -319,19 +353,6 @@
           loadStreams();
         };
       });
-  }
-
-  function canUseDirectUrl(release) {
-    if (!release || release.provider === "fourkhdhub") return null;
-    const mirror = release.mirrors?.[0];
-    const url = mirror?.resolver_url;
-    if (!url) return null;
-    const lower = url.toLowerCase();
-    if (lower.includes(".mpd") || lower.includes(".m3u8")) return null;
-    const hasCookie = (mirror.headers || []).some(
-      (h) => String(h[0] || "").toLowerCase() === "cookie"
-    );
-    return hasCookie ? null : url;
   }
 
   async function loadStreams() {
@@ -362,10 +383,10 @@
           const codec = rel.codec ? escapeHtml(rel.codec.toUpperCase()) : "";
           const size = rel.size_bytes ? formatBytes(rel.size_bytes) : "";
           const lang = rel.language ? escapeHtml(rel.language) : "";
-          const directUrl = canUseDirectUrl(rel);
-          const speedBadge = directUrl ? `<span class="badge">⚡ DIRECT CDN</span>` : "";
-          const meta = [quality, codec, lang, size].filter(Boolean).join(" • ");
           const label = rel.filename?.trim() || `${d.title} ${rel.quality || ""}`.trim();
+          const edgeObj = buildEdgeUrls(rel, label);
+          const speedBadge = edgeObj ? `<span class="badge">⚡ EDGE CDN</span>` : "";
+          const meta = [quality, codec, lang, size].filter(Boolean).join(" • ");
           return `
             <div class="stream-row">
               <div class="stream-meta">
@@ -402,8 +423,6 @@
   function triggerBrowserDownload(url, filename) {
     const a = document.createElement("a");
     a.href = url;
-    a.target = "_blank";
-    a.rel = "noreferrer";
     if (filename) a.download = filename;
     document.body.appendChild(a);
     a.click();
@@ -415,26 +434,21 @@
     const fallbackName = `${d?.title || "movie"}_${release?.quality || "video"}.mp4`.replace(/\s+/g, "_");
     const filename = release?.filename?.trim() || fallbackName;
 
-    // Fast path: 0ms instant direct CDN URL when no Cookie proxy or 4KHDHub scrape is needed
-    const directUrl = canUseDirectUrl(release);
-    if (directUrl) {
+    // Fast path: 0ms Cloudflare Edge CDN stream/download (bypasses home tunnel & fixes 428 UA block!)
+    const edgeResolved = buildEdgeUrls(release, filename);
+    if (edgeResolved) {
       if (mode === "download") {
-        setStatus(`⚡ Direct CDN download started: ${filename}`);
-        triggerBrowserDownload(directUrl, filename);
+        setStatus(`⚡ Edge CDN download started: ${filename}`);
+        triggerBrowserDownload(edgeResolved.download_url, filename);
         return;
       }
       if (mode === "copy") {
-        await navigator.clipboard.writeText(directUrl).catch(() => {});
-        setStatus("⚡ Direct CDN link copied to clipboard (paste in IDM / 1DM / VLC)!");
+        const absUrl = `${location.origin}${edgeResolved.download_url}`;
+        await navigator.clipboard.writeText(absUrl).catch(() => {});
+        setStatus("⚡ Edge CDN download link copied (paste in IDM / 1DM / VLC)!");
         return;
       }
-      openPlayer(d?.title || filename, {
-        stream_url: directUrl,
-        download_url: directUrl,
-        is_hls: false,
-        is_dash: false,
-        filename,
-      }, release);
+      openPlayer(d?.title || filename, edgeResolved, release);
       return;
     }
 
@@ -452,11 +466,9 @@
         return;
       }
       if (mode === "copy") {
-        const absUrl = resolved.download_url.startsWith("http")
-          ? resolved.download_url
-          : `${location.origin}${resolved.download_url}`;
+        const absUrl = `${location.origin}${resolved.download_url}`;
         await navigator.clipboard.writeText(absUrl).catch(() => {});
-        setStatus("Link copied to clipboard!");
+        setStatus("Download link copied!");
         return;
       }
 
@@ -471,7 +483,7 @@
     const video = $("video-player");
     $("player-title").textContent = `▶ ${title}`;
     $("player-download-link").href = resolved.download_url;
-    $("player-download-link").download = resolved.filename || "movie.mp4";
+    $("player-download-link").download = resolved.filename;
     $("player-subtitles").innerHTML = `<span class="muted">Loading subtitles...</span>`;
 
     if (state.hlsInstance) {
@@ -482,10 +494,14 @@
       state.dashInstance.reset();
       state.dashInstance = null;
     }
+    if (state.dashInstance) {
+      state.dashInstance.reset();
+      state.dashInstance = null;
+    }
 
     video.innerHTML = "";
     video.onerror = () => {
-      setStatus("Playback error (codec may be unsupported in browser). Try another stream or tap [↓ Fast Download].");
+      setStatus("Playback error (browser may not support this codec like HEVC/H.265). Try another stream or click [↓ Download].");
     };
 
     if (resolved.is_dash && window.dashjs) {
@@ -627,9 +643,9 @@
   $("btn-help").onclick = () => $("help-modal").classList.remove("hidden");
   $("btn-close-help").onclick = () => $("help-modal").classList.add("hidden");
 
-  $("tab-mobile-catalog").onclick = () => setMobileView("catalog");
-  $("tab-mobile-details").onclick = () => setMobileView("details");
-  $("btn-mobile-back").onclick = () => setMobileView("catalog");
+  if ($("tab-mobile-catalog")) $("tab-mobile-catalog").onclick = () => setMobileView("catalog");
+  if ($("tab-mobile-details")) $("tab-mobile-details").onclick = () => setMobileView("details");
+  if ($("btn-mobile-back")) $("btn-mobile-back").onclick = () => setMobileView("catalog");
 
   let suggestTimer = null;
   $("search-input").addEventListener("input", () => {
@@ -687,8 +703,6 @@
         closePlayer();
       } else if (!$("help-modal").classList.contains("hidden")) {
         $("help-modal").classList.add("hidden");
-      } else if ($("tui-workspace")?.getAttribute("data-mobile-view") === "details") {
-        setMobileView("catalog");
       } else {
         $("suggest-box").classList.add("hidden");
       }
@@ -750,3 +764,4 @@
 
   setInterval(refreshUpdaterStatus, 30000);
 })();
+
