@@ -367,9 +367,29 @@
     setStatus(`Fetching streams for ${d.title}...`);
 
     try {
-      const releases = await apiFetch(
+      let releases = await apiFetch(
         `/api/streams?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(id)}&season=${state.selectedSeason}&episode=${state.selectedEpisode}`
       );
+
+      if (state.selectedSeason > 0 || state.selectedEpisode > 0) {
+        const filtered = releases.filter(
+          (r) =>
+            (!r.season || r.season === state.selectedSeason) &&
+            (!r.episode || r.episode === state.selectedEpisode)
+        );
+        if (filtered.length > 0) releases = filtered;
+      }
+
+      // Sort H.264 (universal browser codec) above HEVC/H.265, and direct MP4 above MPD
+      releases.sort((a, b) => {
+        const aHevc = /hevc|h265|265/i.test(a.codec || a.filename || "") ? 1 : 0;
+        const bHevc = /hevc|h265|265/i.test(b.codec || b.filename || "") ? 1 : 0;
+        if (aHevc !== bHevc) return aHevc - bHevc;
+        const aMpd = (a.mirrors?.[0]?.resolver_url || "").toLowerCase().includes(".mpd") ? 1 : 0;
+        const bMpd = (b.mirrors?.[0]?.resolver_url || "").toLowerCase().includes(".mpd") ? 1 : 0;
+        return aMpd - bMpd;
+      });
+      state.currentReleases = releases;
 
       if (!releases.length) {
         container.innerHTML = `<div class="muted">No streams found for this selection.</div>`;
@@ -380,7 +400,11 @@
       container.innerHTML = releases
         .map((rel, idx) => {
           const quality = rel.quality ? `[${escapeHtml(rel.quality)}]` : "";
+          const isHevc = /hevc|h265|265/i.test(rel.codec || rel.filename || "");
           const codec = rel.codec ? escapeHtml(rel.codec.toUpperCase()) : "";
+          const codecBadge = isHevc
+            ? `<span class="badge" style="color:var(--muted)">HEVC</span>`
+            : `<span class="badge" style="color:var(--green)">✓ H264</span>`;
           const size = rel.size_bytes ? formatBytes(rel.size_bytes) : "";
           const lang = rel.language ? escapeHtml(rel.language) : "";
           const label = rel.filename?.trim() || `${d.title} ${rel.quality || ""}`.trim();
@@ -390,7 +414,7 @@
           return `
             <div class="stream-row">
               <div class="stream-meta">
-                <div class="stream-title">${escapeHtml(label)} ${speedBadge}</div>
+                <div class="stream-title">${escapeHtml(label)} ${codecBadge} ${speedBadge}</div>
                 <div class="stream-sub">${meta || escapeHtml(rel.provider)}</div>
               </div>
               <div class="stream-actions">
@@ -500,8 +524,54 @@
     }
 
     video.innerHTML = "";
+    const oldNotice = $("player-codec-notice");
+    if (oldNotice) oldNotice.remove();
+
     video.onerror = () => {
-      setStatus("Playback error (browser may not support this codec like HEVC/H.265). Try another stream or click [↓ Download].");
+      // If an H.264 stream exists and we haven't tried auto-switching yet, switch automatically!
+      const h264Fallback = (state.currentReleases || []).find(
+        (r) => r !== release && !/hevc|h265|265/i.test(r.codec || r.filename || "")
+      );
+      if (h264Fallback && !release._retriedH264) {
+        h264Fallback._retriedH264 = true;
+        setStatus("HEVC not supported by browser; auto-switching to H.264 stream...");
+        resolveAndAct(h264Fallback, "stream");
+        return;
+      }
+
+      const absStream = resolved.stream_url.startsWith("http")
+        ? resolved.stream_url
+        : `${location.origin}${resolved.stream_url}`;
+      const absDl = resolved.download_url.startsWith("http")
+        ? resolved.download_url
+        : `${location.origin}${resolved.download_url}`;
+
+      setStatus("HEVC/H.265 codec: use VLC or Download to watch on this device.");
+      const wrap = $("player-video-wrap");
+      if (wrap && !$("player-codec-notice")) {
+        const notice = document.createElement("div");
+        notice.id = "player-codec-notice";
+        notice.className = "player-codec-notice";
+        notice.innerHTML = `
+          <div class="tui-box notice-card">
+            <div class="pane-title">─ HEVC / H.265 Stream Notice ─</div>
+            <p>This title is encoded in <strong>HEVC (H.265)</strong>, which Linux Chrome cannot decode directly in-tab.</p>
+            <div class="notice-actions">
+              <a class="tui-btn tui-btn-primary" href="vlc://${escapeHtml(absStream)}">[ ▶ Open in VLC ]</a>
+              <a class="tui-btn tui-btn-green" href="${escapeHtml(absDl)}" download>[ ↓ Fast Download MP4 ]</a>
+              <button id="btn-notice-copy" class="tui-btn">[ 📋 Copy Stream URL ]</button>
+            </div>
+          </div>
+        `;
+        wrap.appendChild(notice);
+        const copyBtn = $("btn-notice-copy");
+        if (copyBtn) {
+          copyBtn.onclick = async () => {
+            await navigator.clipboard.writeText(absStream).catch(() => {});
+            copyBtn.textContent = "[ ✓ Copied! ]";
+          };
+        }
+      }
     };
 
     if (resolved.is_dash && window.dashjs) {

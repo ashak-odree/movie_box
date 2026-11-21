@@ -28,39 +28,66 @@ async function proxyViaBackend(
 ): Promise<Response> {
   const base = backendBase.replace(/\/$/, "");
   const cookieHdr = req.headers.get("Cookie") || "";
-  let resolved = backendResolveCache.get(targetUrl);
 
-  if (!resolved) {
-    const resResp = await fetch(`${base}/api/resolve`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: cookieHdr,
-      },
-      body: JSON.stringify({ url: targetUrl, headers, filename }),
-    });
-    if (!resResp.ok) {
-      return new Response(resResp.body, { status: resResp.status, headers: resResp.headers });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let resolved = backendResolveCache.get(targetUrl);
+
+    if (!resolved) {
+      const resResp = await fetch(`${base}/api/resolve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookieHdr,
+        },
+        body: JSON.stringify({ url: targetUrl, headers, filename }),
+      });
+      if (!resResp.ok) {
+        return new Response(resResp.body, { status: resResp.status, headers: resResp.headers });
+      }
+      resolved = (await resResp.json()) as { stream_url: string; download_url: string };
+      if (backendResolveCache.size > 300) backendResolveCache.clear();
+      backendResolveCache.set(targetUrl, resolved);
     }
-    resolved = (await resResp.json()) as { stream_url: string; download_url: string };
-    if (backendResolveCache.size > 300) backendResolveCache.clear();
-    backendResolveCache.set(targetUrl, resolved);
+
+    const pathAndQuery = isDownload ? resolved.download_url : resolved.stream_url;
+    const fwdHeaders = new Headers();
+    if (cookieHdr) fwdHeaders.set("Cookie", cookieHdr);
+
+    let range = req.headers.get("Range");
+    // Cap open-ended browser video ranges (e.g. "bytes=0-") to 4MB chunks
+    // so aborted probes don't clog the cloudflared tunnel with a 1GB stream and trigger 502!
+    if (!isDownload) {
+      if (!range) {
+        range = "bytes=0-4194303";
+      } else {
+        const m = /^bytes=(\d+)-$/i.exec(range.trim());
+        if (m) {
+          const start = Number(m[1]);
+          range = `bytes=${start}-${start + 4194303}`;
+        }
+      }
+    }
+    if (range) fwdHeaders.set("Range", range);
+
+    try {
+      const upstream = await fetch(`${base}${pathAndQuery}`, {
+        method: "GET",
+        headers: fwdHeaders,
+      });
+      if ((upstream.status === 404 || upstream.status >= 500) && attempt === 0) {
+        backendResolveCache.delete(targetUrl);
+        continue;
+      }
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: upstream.headers,
+      });
+    } catch (err) {
+      backendResolveCache.delete(targetUrl);
+      if (attempt === 1) throw err;
+    }
   }
-
-  const pathAndQuery = isDownload ? resolved.download_url : resolved.stream_url;
-  const fwdHeaders = new Headers();
-  if (cookieHdr) fwdHeaders.set("Cookie", cookieHdr);
-  const range = req.headers.get("Range");
-  if (range) fwdHeaders.set("Range", range);
-
-  const upstream = await fetch(`${base}${pathAndQuery}`, {
-    method: "GET",
-    headers: fwdHeaders,
-  });
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: upstream.headers,
-  });
+  return json({ error: "Backend stream proxy failed" }, 502);
 }
 
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>) {
